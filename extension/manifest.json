@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Udemy 課程下載助手",
+  "version": "0.3.0",
+  "description": "檢查 Udemy 官方下載選項、載入課程章節，依序備份已可播放的未加密 HLS 影片。",
+  "minimum_chrome_version": "114",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["https://*.udemy.com/*", "https://*.udemycdn.com/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src https://udemy.com https://*.udemy.com https://udemycdn.com https://*.udemycdn.com"
+  },
+  "action": {
+    "default_title": "檢查課程下載",
+    "default_popup": "popup.html"
+  }
+}

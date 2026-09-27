@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Udemy 未加密影片備份</title><link rel="stylesheet" href="manager.css"></head>
+<body><main>
+  <div class="eyebrow">UDEMY / LOCAL BACKUP · <span id="version"></span></div>
+  <h1>保留這一堂的學習內容</h1>
+  <p class="intro">檢查目前播放器的 HLS 清單，再將未加密影片存到你的電腦。</p>
+  <section class="card"><div class="label">目前講座</div><h2 id="title">讀取中…</h2><p id="course"></p><a id="source" target="_blank" rel="noreferrer">返回課程 ↗</a></section>
+  <details id="diagnostics" class="card" hidden>
+    <summary>錯誤診斷（不含媒體網址或登入資料）</summary>
+    <button id="copy-diagnostic" class="secondary">複製錯誤診斷</button>
+    <p id="copy-status" class="small" role="status"></p>
+    <pre id="diagnostic-text"></pre>
+  </details>
+  <section class="card">
+    <div class="step">01 · 檢查影片</div>
+    <p id="inspect-error" class="operation-error" role="alert" hidden></p>
+    <p>只支援未加密、含聲音的完整 HLS 影片。DRM、需要解密金鑰、分離音軌及其他不支援格式都會停止。</p>
+    <p class="small">此步驟會請求 Udemy 與 Udemy CDN 的讀取權限，使用目前登入狀態讀取清單。網址只在本機暫存，不傳到其他服務。</p>
+    <button id="inspect" disabled>授權並檢查清單</button>
+    <div id="quality-row" hidden><label for="quality">影片畫質</label><select id="quality"></select><button id="verify">檢查此畫質</button></div>
+    <p id="result" role="status" aria-live="polite"></p>
+  </section>
+  <section class="card">
+    <div class="step">02 · 儲存到電腦</div>
+    <p id="save-error" class="operation-error" role="alert" hidden></p>
+    <p>輸出為 <strong>.ts 影片</strong>，可用 VLC 等播放器開啟。下載期間請保持此分頁開啟。</p>
+    <div class="buttons"><button id="save" disabled>選擇位置並開始儲存</button><button id="cancel" class="secondary" disabled>取消</button></div>
+    <progress id="progress" value="0" max="1"></progress>
+    <p id="progress-text" role="status" aria-live="polite">尚未開始</p>
+  </section>
+  <p class="small">本頁備份目前一堂講座。若要一次選取多堂，請回課程頁開啟擴充功能，選「載入整門課目錄」。若網址已失效，回播放器重新載入後再檢查。</p>
+</main><script type="module" src="manager.js"></script></body></html>

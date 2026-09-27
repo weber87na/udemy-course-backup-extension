@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Udemy 課程下載助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="eyebrow">COURSE DOWNLOAD HELPER</div>
+    <h1>把學習資源留下來</h1>
+    <p>檢查目前講座的官方下載選項。</p>
+  </header>
+  <main>
+    <section class="course">
+      <div class="label">目前課程</div>
+      <h2 id="course-title">正在讀取…</h2>
+      <p id="lecture-title"></p>
+    </section>
+    <section id="status-card" class="status neutral" aria-live="polite">
+      <h2 id="status-title">準備檢查</h2>
+      <p id="status-text">請保持 Udemy 課程分頁開啟。</p>
+    </section>
+    <div class="actions">
+      <button id="inspect-menu" class="primary" disabled>檢查播放器選單</button>
+      <button id="refresh" disabled>重新檢查</button>
+    </div>
+    <section>
+      <h2 class="section-title">頁面上的下載項目 <span id="count">0</span></h2>
+      <ul id="downloads" class="downloads"></ul>
+      <p id="empty" class="muted">尚未找到項目。教材請先在網頁展開「資源」選單，再重新檢查。</p>
+    </section>
+    <p id="feedback" role="status"></p>
+    <button id="stream" class="primary" disabled>檢查未加密串流備份</button>
+    <button id="course-batch" class="primary" disabled>載入整門課目錄</button>
+    <details>
+      <summary>這個工具能做什麼？</summary>
+      <p>啟動頁面已開放的官方下載，並辨識停用的下載選項。切換其他課程後也可重新檢查。</p>
+      <p>另可備份目前講座或載入整門課目錄，勾選章節後依序下載。支援完整、未加密的 MPEG-TS 影片；遇到 DRM、加密或不支援的格式，會顯示該堂原因。</p>
+      <p>官方下載按鈕只代表已送出操作，完成情況請看 Chrome 下載清單。串流備份會另外開啟進度頁面。</p>
+      <p>不讀取帳號密碼、Cookie 或金鑰。紀錄只儲存在這台電腦，沒有伺服器或追蹤程式。</p>
+    </details>
+    <footer>
+      <button id="export" class="link" disabled>匯出本次檢查 JSON</button>
+      <a href="https://support.udemy.com/hc/en-us/articles/229231167-How-to-Download-Lectures-to-a-Computer-if-Enabled" target="_blank" rel="noreferrer">Udemy 下載說明 ↗</a>
+    </footer>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Udemy 整門課備份</title><link rel="stylesheet" href="manager.css"><link rel="stylesheet" href="batch.css"></head>
+<body><main>
+  <div class="eyebrow">UDEMY / COURSE BACKUP · <span id="version"></span></div>
+  <h1>一次整理，依序保存</h1>
+  <p class="intro">載入目前這門課的目錄，勾選章節或講座，將影片按章節存入同一個資料夾。</p>
+  <section class="card"><div class="label">目前課程</div><h2 id="course">讀取中…</h2><button id="source" class="secondary" disabled>查看課程分頁 ↗</button>
+    <p id="error" class="operation-error" role="alert" hidden></p>
+    <div class="buttons"><button id="load" disabled>授權並載入所有章節</button><button id="report" class="secondary" disabled>匯出進度紀錄</button></div>
+    <p id="catalog-status" role="status" aria-live="polite">請保持 Udemy 課程分頁開啟。</p>
+  </section>
+  <section id="download-card" class="card" hidden>
+    <div class="step">儲存設定</div>
+    <label for="quality">偏好畫質</label><select id="quality"><option value="best">最高可用畫質</option><option value="1080">最高 1080p</option><option value="720">最高 720p</option><option value="480">最高 480p</option></select>
+    <p class="small">各堂畫質不同時選擇最接近且不超過上限的版本；若全部超過上限，使用最低畫質。只有一種串流時使用該版本。</p>
+    <div class="buttons"><button id="folder" class="secondary">選擇儲存資料夾</button><button id="start" disabled>開始下載所選影片</button><button id="stop" class="secondary" disabled>停止</button></div>
+    <p id="folder-name" class="small">尚未選擇資料夾。影片會分成「課程／章節／講座.ts」。</p>
+    <p id="overall" role="status" aria-live="polite">尚未開始</p>
+    <progress id="overall-progress" max="1" value="0" aria-label="整批進度"></progress>
+    <p id="current">等待開始</p><progress id="lecture-progress" max="1" value="0" aria-label="目前講座進度"></progress>
+    <p class="small">下載時保持這個頁面和原課程分頁開啟，請勿手動切換講座。工具會依序切換講座，可能改變最近觀看位置。可停止後再按開始；已完成的項目會保留，未完成的單堂會重新下載。已有非空白同名檔案會略過，不會覆寫，也不會視為已驗證完成。</p>
+  </section>
+  <section id="catalog-card" class="card" hidden>
+    <div class="catalog-heading"><h2>章節與講座</h2><span id="selection"></span></div>
+    <div class="buttons"><button id="all" class="secondary">全選影片</button><button id="none" class="secondary">取消全選</button><button id="remaining" class="secondary">選取未完成</button></div>
+    <p class="small">教材、測驗等非影片項目會列出供核對；此流程只儲存影片。</p>
+    <div id="sections"></div>
+  </section>
+  <details id="diagnostics" class="card" hidden><summary>最近一次錯誤診斷</summary><button id="copy-diagnostic" class="secondary">複製診斷</button><pre id="diagnostic-text"></pre></details>
+  <p class="small">支援目前可播放、未加密且影音合併的 MPEG-TS HLS。遇到加密、DRM 或不支援的格式，該堂會標示失敗，不會嘗試解密。輸出 .ts 可用 VLC 播放；各堂開始時才取得新網址。</p>
+</main><script type="module" src="batch.js"></script></body></html>

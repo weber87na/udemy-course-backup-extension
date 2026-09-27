@@ -1,0 +1,27 @@
+# Generated extension bundles
+/udemy-download-helper-*.zip
+
+# Local dependencies, reports and temporary files
+node_modules/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+
+# Personal downloads and exported diagnostics
+/downloads/
+/backups/
+/udemy-check-*.json
+/udemy-course-progress-*.json
+*.ts
+*.mp4
+*.m3u8
+*.vtt
+*.srt
+
+# Local agent state
+/.codex/
+/.agents/
