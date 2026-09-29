@@ -21,6 +21,8 @@ Thumbs.db
 *.m3u8
 *.vtt
 *.srt
+*.part
+/skills/*/local-config.json
 
 # Local agent state
 /.codex/

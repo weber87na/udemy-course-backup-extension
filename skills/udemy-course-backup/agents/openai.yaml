@@ -1,0 +1,4 @@
+interface:
+  display_name: "Udemy 課程備份"
+  short_description: "透過 Node.js 保存可正常播放的 Udemy 課程影片與章節"
+  default_prompt: "使用 $udemy-course-backup 列出我的 Udemy 課程目錄，並備份選定章節的影片。"

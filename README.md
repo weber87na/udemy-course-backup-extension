@@ -1,6 +1,51 @@
 # Udemy 課程下載助手
 
-Chrome Manifest V3 擴充功能，適用於已登入且可正常播放的 Udemy 課程。v0.3.0 可檢查官方下載選項、備份單堂未加密 HLS 影片，或載入課程目錄後依章節批次備份影片。沒有綁定特定課程 ID。
+備份已登入且可正常播放的 Udemy 課程。提供 Chrome 擴充功能（v0.3.0）、Node.js CLI 與 Codex skill（v0.4.0），沒有綁定特定課程 ID。CLI 不需要安裝擴充功能；兩種介面共用目錄辨識、HLS 檢查與影片格式驗證。
+
+## CLI
+
+需要 Node.js 22.12+ 與正常開啟、已登入購課帳號的 Chrome 144+。安裝套件後即可執行，不需下載另一份瀏覽器：
+
+```powershell
+pnpm install --frozen-lockfile
+node cli/index.mjs --help
+node cli/index.mjs scan "https://www.udemy.com/course/your-course/learn/" --json
+node cli/index.mjs download "https://www.udemy.com/course/your-course/learn/" --chapters 1,3 --max-height 1080 --out "D:\CourseBackups"
+node cli/index.mjs download "https://www.udemy.com/course/your-course/learn/" --lectures 2,5 --out "D:\CourseBackups"
+node cli/index.mjs download "https://www.udemy.com/course/your-course/learn/" --all --out "D:\CourseBackups"
+```
+
+也可使用 `npm install` 安裝 `package.json` 的套件。已知下載範圍可直接執行 `download`，它也會列出目錄，不必先跑一次 `scan`。
+
+首次連線前，由使用者手動開啟 `chrome://inspect/#remote-debugging` 並啟用遠端偵錯。CLI 連線時會出現 Chrome 原生授權提示，使用者按「允許」後才繼續。這是 [Chrome 官方 auto-connect 流程](https://developer.chrome.com/docs/devtools/agents/use-cases/auto-connect)，透過 Puppeteer 官方連線介面定位本機 Chrome。CLI 不會修改設定、讀取 Chrome profile 中的登入資料檔案、接受自訂 CDP endpoint 或操作瀏覽器內部頁面。
+
+CLI 只建立自己的課程分頁，沿用目前登入狀態。完成或取消時關閉本次分頁並中斷連線，保留使用者的其他分頁。若被導向登入頁，只等待使用者完成登入後返回指定課程，不讀取登入表單。
+
+- `scan` 列出章節、全課講座編號與類型；全課編號包含文章、測驗等非影片項目。
+- `--chapters` 選章節內的影片；`--lectures` 選全課講座編號；`--all` 選目前這門課的全部影片。三者擇一，未指定時只下載目前講座。
+- `--quality best|worst` 預設最高畫質。`--max-height` 只接受不超過上限的已知高度；沒有符合版本或來源本身是無解析度資訊的單一 media 清單時，停止該堂。未指定上限時可保留未知解析度的來源串流。
+- `--wait-login 600` 設定 Chrome 授權、課程及播放器的等待上限；不會無限重試。
+- `--json` 讓 stdout 只輸出結果 JSON，進度寫到 stderr。退出碼 `0` 表示所選項目完成或略過、`1` 有失敗、`130` 使用者取消；略過不代表內容已驗證。
+
+直接 HLS 也可使用 `download --media "<Udemy／Udemy CDN HTTPS HLS 網址>" --title "檔名" --out "資料夾"`。此模式不開 Chrome、不讀取 Cookie，不適用任意其他網站。
+
+CLI 逐堂取得當次播放器已載入的清單，支援未加密且影音合併的 MPEG-TS HLS，輸出 `.ts`；不支援 DRM、解密、字幕、DASH 或分離音軌。Cookie 僅在本次程序記憶體使用，且只送到原課程的精確 Udemy origin；CDN 不帶這些 Cookie。所有 HTTP 轉址在送出下一個請求前都檢查 HTTPS 及 Udemy 網域。
+
+影片完整寫入並關閉前，只存在隨機 `.part` 暫存檔；完成後以不覆寫的硬連結方式發布正式檔案，因此目的磁碟需支援硬連結（例如 NTFS、APFS、ext4）。既有非空檔會略過並標示未驗證；既有 0-byte 檔案會回報錯誤並保留，請指定其他輸出資料夾。Ctrl+C 會清理本次暫存檔，不刪除既有影片；沒有片段斷點續傳。
+
+## Codex skill
+
+```powershell
+node scripts/install-skill.mjs
+```
+
+預設安裝到 `$CODEX_HOME/skills/udemy-course-backup`，未設定 `CODEX_HOME` 時使用 `~/.codex/skills/udemy-course-backup`。不會覆寫多奇使用的 `course-backup` skill。安裝後可用：
+
+> 使用 $udemy-course-backup，列出這門 Udemy 的章節，下載第 1、3 章到 D:\CourseBackups。
+
+更新同名 skill 時執行 `node scripts/install-skill.mjs --force`；專案搬家後也以此命令更新定位。或將 `UDEMY_BACKUP_HOME` 指向專案根目錄。`--dest` 可以指定技能資料夾本身。技能的 `scripts/run.mjs` 保留呼叫時的工作目錄，將參數交給本專案 CLI；`local-config.json` 只存在安裝位置，不提交版控。
+
+CLI 與 skill 以模擬瀏覽器、合成 HLS 及本機檔案驗證；尚未以此 CLI 完成真實 Udemy 課程下載。原擴充功能的實測範圍見下方。
 
 ## 安裝與更新
 
@@ -9,7 +54,7 @@ Chrome Manifest V3 擴充功能，適用於已登入且可正常播放的 Udemy 
 3. 按「載入未封裝項目」，選擇本專案中的 **`extension` 資料夾**（內含 `manifest.json`），不是專案根目錄。若使用 ZIP，請先解壓縮，再選擇包含 `manifest.json` 的資料夾。
 4. 到 Udemy 開啟一堂影片，點工具列的擴充功能圖示，選「Udemy 課程下載助手」。
 
-不需要 npm、Node.js、Python 或伺服器。原始碼可直接載入；ZIP 請先解壓縮。
+擴充功能不需要 npm、Node.js、Python 或伺服器。原始碼可直接載入；ZIP 請先解壓縮。
 
 **更新前先讓目前單堂下載完成。** 再到 `chrome://extensions`，在工具卡片按重新載入，關閉舊備份頁，回 Udemy 重新播放幾秒後暫停，再開啟新的工作。重新載入擴充功能會清除尚未取用的 session 工作資料；不要在下載中更新。
 
@@ -69,7 +114,7 @@ ffmpeg -i 'lecture.ts' -map 0 -c copy 'lecture.mp4'
 - 選用 `https://*.udemy.com/*` 與 `https://*.udemycdn.com/*`：啟用串流或批次流程時才要求，用於操作課程頁、讀取清單及片段。可在 Chrome 擴充功能設定移除。
 - 資料夾授權由 Chrome 的檔案選擇器取得，只在使用者選定的位置寫入。
 
-不讀取或匯出密碼、Cookie、解密金鑰；媒體請求使用瀏覽器既有登入狀態。沒有外部伺服器、分析追蹤或廣告。拒絕非 Udemy 網域、HTTP 或含帳密網址。僅在擴充功能的 CSP 精確限制 Udemy／Udemy CDN HTTPS 網域時允許轉址，並再次驗證最終來源。串流網址不出現在匯出的檢查、批次報告或下載歷程中。
+擴充功能不讀取或匯出密碼、Cookie、解密金鑰；媒體請求使用瀏覽器既有登入狀態。沒有外部伺服器、分析追蹤或廣告。拒絕非 Udemy 網域、HTTP 或含帳密網址。僅在擴充功能的 CSP 精確限制 Udemy／Udemy CDN HTTPS 網域時允許轉址，並再次驗證最終來源。串流網址不出現在匯出的檢查、批次報告或下載歷程中。CLI 的 Cookie 使用與逐次轉址檢查見上方 CLI 說明。
 
 ## 故障排除
 
@@ -89,9 +134,11 @@ ffmpeg -i 'lecture.ts' -map 0 -c copy 'lecture.mp4'
 node --test tests/*.test.mjs
 ```
 
-無第三方程式庫或建置流程。測試涵蓋下載控制、課程與講座切換、網址邊界、HLS 解析及拒絕加密、CSP 轉址限制、檔案串流寫入、批次目錄與選取、檔案存在／權限錯誤、重複工作鎖定及中斷取消。測試使用人工資料；mock 通過不等於 Chrome 實際執行所有轉址限制，也不等於已完成真實整課備份。
+擴充功能無第三方程式庫或建置流程；CLI 使用鎖定版本的 `puppeteer-core` 連接 Chrome。測試涵蓋下載控制、課程與講座切換、網址邊界、HLS 解析及拒絕加密、CSP 轉址限制、檔案串流寫入、批次目錄與選取、檔案存在／權限錯誤、重複工作鎖定及中斷取消。測試使用人工資料；mock 通過不等於 Chrome 實際執行所有轉址限制，也不等於已完成真實整課備份。
 
 v0.3.0：115 項自動測試通過，包含另一門課、不同語言與無編號標題的目錄案例，以及停止時取消尚未完成的講座切換。
+
+v0.4.0：增加 CLI 參數、純 JSON 輸出、Chrome 連線生命週期、Cookie 來源限制、逐次轉址檢查、原子檔案發布與 skill 安裝器測試；測試不會開啟真實 Chrome 或下載課程影片。
 
 ## 官方參考
 
