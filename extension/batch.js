@@ -135,7 +135,8 @@ async function processItem(item,{signal}) {
   if(signal.aborted){await bridge.call('cancel').catch(()=>{});abortIfNeeded(signal);}
   let capture;
   try{
-    capture=await waitForStream(bridge,item,{signal,onWaiting:reason=>{$('current').textContent=`${item.title}：${reason}`;}});
+    capture=await waitForStream(bridge,item,{signal,onWaiting:reason=>{$('current').textContent=`${item.title}：${reason}`;},
+      onDiagnostic:source=>{if(source)diagnostic.source=source;else delete diagnostic.source;}});
   }catch(error){
     // Page-level loss must stop the queue; media-specific failures can be
     // recorded while subsequent lectures continue.
@@ -167,7 +168,7 @@ $('start').addEventListener('click',async()=>{
       if(item?.status==='failed'){
         item.error=safeError({message:item.error});
         lastFailureDiagnostic={...diagnostic,events:[...diagnostic.events]};
-        $('diagnostic-text').textContent=JSON.stringify(lastFailureDiagnostic,null,2);$('diagnostics').hidden=false;
+        $('diagnostic-text').textContent=JSON.stringify(lastFailureDiagnostic,null,2);$('diagnostics').hidden=false;$('diagnostics').open=true;
         if(fatalReason)controller.abort();
       }
       update();persist();

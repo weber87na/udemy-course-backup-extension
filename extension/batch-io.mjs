@@ -51,14 +51,31 @@ export function pageBridge(chromeApi,tabId,courseKey) {
   };
 }
 
-export async function waitForStream(bridge,item,{signal,timeoutMs=60000,onWaiting=()=>{}}={}) {
+function sourceSummary(value) {
+  if(!value||typeof value!=='object')return null;
+  const result={};
+  for(const key of ['hlsCount','dashCount','playerReadyState']){
+    const number=value[key];
+    if(!Number.isSafeInteger(number)||number<0||number>(key==='playerReadyState'?4:10000))return null;
+    result[key]=number;
+  }
+  for(const key of ['playerPaused','mediaKeysAttached']){
+    if(typeof value[key]!=='boolean')return null;
+    result[key]=value[key];
+  }
+  return result;
+}
+
+export async function waitForStream(bridge,item,{signal,timeoutMs=60000,onWaiting=()=>{},onDiagnostic=()=>{}}={}) {
   const until=Date.now()+timeoutMs;
-  let lastReason='';
+  let lastReason='',lastSource=null;
   while(Date.now()<until){
     abortIfNeeded(signal);
     const state=await bridge.call('capture',item);
     abortIfNeeded(signal);
-    if(state?.status==='ready'&&state.candidates?.length)return state;
+    if(state?.status==='ready'&&state.candidates?.length){onDiagnostic(null);return state;}
+    lastSource=sourceSummary(state?.sourceDiagnostic);
+    onDiagnostic(lastSource);
     lastReason=String(state?.reason||'等待播放器載入…').replace(/(?:https?:\/\/|blob:|data:)[^\s<>"']+/gi,'[來源網址已隱藏]').replace(/[\u0000-\u001f\u007f-\u009f]/g,' ').slice(0,500);
     onWaiting(lastReason);
     const remaining=until-Date.now();
@@ -66,6 +83,7 @@ export async function waitForStream(bridge,item,{signal,timeoutMs=60000,onWaitin
     await delay(Math.min(700,remaining),signal);
   }
   abortIfNeeded(signal);
+  if(lastSource?.dashCount>0&&lastSource.hlsCount===0)throw new Error('等待播放器逾時：頁面已載入 DASH（.mpd）來源，未找到這堂講座的 HLS 清單。目前工具不支援 DASH。這項來源觀察不會判定清單是否加密；單純重新播放或延長等待無法增加格式支援。');
   throw new Error(`等待播放器逾時。${lastReason?`最後狀態：${lastReason} `:''}請在課程分頁確認這堂可正常播放；若瀏覽器阻擋自動播放，播放幾秒後暫停，再重試此堂。`);
 }
 

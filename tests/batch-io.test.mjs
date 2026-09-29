@@ -233,6 +233,32 @@ test('waitForStream preserves an inconclusive protection hint on timeout without
   assert.ok(!waiting[0].includes('token=private'));
 });
 
+test('DASH-only observations explain the unsupported format and export only diagnostic scalars',async t=>{
+  let now=0;
+  t.mock.method(Date,'now',()=>now);
+  const reports=[];
+  const sourceDiagnostic={hlsCount:0,dashCount:1,playerReadyState:4,playerPaused:false,mediaKeysAttached:true,
+    url:'https://udemycdn.com/a.mpd?token=private',license:'private'};
+  await assert.rejects(waitForStream({call:async()=>({status:'pending',reason:'DASH source observed',sourceDiagnostic})},item,
+    {timeoutMs:50,onWaiting:()=>{now=51;},onDiagnostic:report=>reports.push(report)}),error=>{
+    assert.match(error.message,/不支援 DASH/);assert.doesNotMatch(error.message,/阻擋自動播放/);return true;
+  });
+  assert.deepEqual(reports,[{hlsCount:0,dashCount:1,playerReadyState:4,playerPaused:false,mediaKeysAttached:true}]);
+});
+
+test('malformed or mixed-format observations never become a DASH-only diagnosis',async t=>{
+  let now=0;
+  t.mock.method(Date,'now',()=>now);
+  for(const sourceDiagnostic of [
+    {hlsCount:1,dashCount:1,playerReadyState:4,playerPaused:false,mediaKeysAttached:true},
+    {hlsCount:0,dashCount:1,playerReadyState:99,playerPaused:false,mediaKeysAttached:true}
+  ]){
+    now=0;
+    await assert.rejects(waitForStream({call:async()=>({status:'pending',sourceDiagnostic})},item,
+      {timeoutMs:50,onWaiting:()=>{now=51;}}),error=>!error.message.includes('不支援 DASH'));
+  }
+});
+
 test('waitForStream cancels before capture and while waiting for player state',async()=>{
   const before=new AbortController();before.abort();let calls=0;
   await assert.rejects(waitForStream({call:async()=>{calls++;}},item,{signal:before.signal}),{name:'AbortError'});

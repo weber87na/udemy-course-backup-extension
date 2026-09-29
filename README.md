@@ -1,6 +1,6 @@
 # Udemy 課程下載助手
 
-備份已登入且可正常播放的 Udemy 課程。提供 Chrome 擴充功能（v0.3.1）、Node.js CLI 與 Codex skill（v0.4.1），沒有綁定特定課程 ID。CLI 不需要安裝擴充功能；兩種介面共用目錄辨識、HLS 檢查與影片格式驗證。
+備份已登入且可正常播放的 Udemy 課程。提供 Chrome 擴充功能（v0.3.2）、Node.js CLI 與 Codex skill（v0.4.2），沒有綁定特定課程 ID。CLI 不需要安裝擴充功能；兩種介面共用目錄辨識、HLS 檢查與影片格式驗證。
 
 ## CLI
 
@@ -103,6 +103,10 @@ ffmpeg -i 'lecture.ts' -map 0 -c copy 'lecture.mp4'
 ```
 
 ## 實際驗證範圍
+
+另在一堂可正常 1080p 播放的講座觀察到 Udemy CDN 的 DASH MPD 與 fMP4 片段；實際 MPD 宣告 Common Encryption、Widevine、PlayReady，沒有觀察到 HLS 清單。此來源不在目前下載支援範圍。這次檢查沒有下載保存影片，也沒有讀取 license 或解密金鑰；結果僅適用那堂當時播放器的來源，不能推定整門課或其他課程都相同。
+
+v0.3.2 增加來源格式摘要，批次錯誤診斷會顯示 HLS／DASH 觀察數量與播放器狀態，沒有媒體網址、query 或金鑰；DASH-only 觀察的逾時訊息會說明目前格式不支援。**這是診斷改良，沒有新增 DASH／DRM 下載能力。** 一般來源診斷只識別資源格式，不會僅因觀察到 MPD 就判定 DRM。
 
 2026-09-28（台灣時間），使用者已在課程「C# ASP .Net 5 电商API实战: 掌握极致RESTful风格」的「课程导学」（lecture ID `22112428`、asset ID `27699688`）測試單堂下載。播放器官方下載按鈕停用；播放器使用 Shaka 與 HLS。使用者提供畫面顯示已下載 **22 / 130** 個片段，後續文字確認單堂功能可用。片段進度截圖本身不代表整片已完成或所有內容均已驗證。
 

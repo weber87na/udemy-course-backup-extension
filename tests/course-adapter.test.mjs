@@ -53,7 +53,7 @@ class ElementFixture {
 }
 const element = (...args) => new ElementFixture(...args);
 
-function fixture({ slug = 'example-course', courseName = 'Example course', sections = [{ title: 'First chapter', items: [{ id: '11', title: '1. Start', kind: 'video' }, { id: '12', title: '2. Source code', kind: 'article' }] }, { title: 'Second chapter', items: [{ id: '13', title: '3. API requests', kind: 'video' }] }] } = {}) {
+function fixture({ slug = 'example-course', courseName = 'Example course', initialResources = null, sections = [{ title: 'First chapter', items: [{ id: '11', title: '1. Start', kind: 'video' }, { id: '12', title: '2. Source code', kind: 'article' }] }, { title: 'Second chapter', items: [{ id: '13', title: '3. API requests', kind: 'video' }] }] } = {}) {
   const clock = { value: 1000 };
   const body = element('body');
   const sidebar = element('div', { id: 'ct-sidebar-scroll-container' });
@@ -68,7 +68,7 @@ function fixture({ slug = 'example-course', courseName = 'Example course', secti
   video.readyState = 4; video.mediaKeys = null; video.pauseCount = 0;
   video.pause = () => { video.pauseCount += 1; };
   videoContainer.append(video); region.append(videoContainer); body.append(region);
-  const resources = [{ name: `${location.origin}/assets/9000/manifest.m3u8?initial=private`, startTime: 10 }];
+  const resources = initialResources || [{ name: `${location.origin}/assets/9000/manifest.m3u8?initial=private`, startTime: 10 }];
   sections.forEach((section, sectionIndex) => {
     const container = element('div', { 'data-purpose': 'curriculum-section-container' });
     const panel = element('div', { 'data-purpose': `section-panel-${sectionIndex}` });
@@ -223,6 +223,63 @@ test('observer keeps a bounded cache and ignores foreign resource destinations',
   f.emit(Array.from({ length: 96 }, (_, index) => ({ name: `${f.location.origin}/assets/${20000 + index}/master.m3u8`, startTime: f.clock.value + index })));
   f.emit([{ name: 'https://example.com/assets/9000/manifest.m3u8', startTime: f.clock.value + 500 }]);
   assert.equal(f.api.capture(item).status, 'pending'); assert.equal(f.video.pauseCount, 0);
+});
+
+test('DASH format hint survives resource-buffer loss and exposes only fixed diagnostic fields', async () => {
+  const f = fixture({ initialResources: [] }); const catalog = await f.api.collect(f.location.href); const item = catalog.sections[0].items[0];
+  await f.api.activate(item); f.video.mediaKeys = {}; f.video.paused = false;
+  f.emit([{ name: 'https://dash-enc-c.udemycdn.com/private-path/manifest.mpd?token=private-secret', startTime: f.clock.value }]);
+  const pending = f.api.capture(item);
+  assert.equal(f.resources.length, 0); assert.equal(f.observers.length, 1);
+  assert.equal(pending.status, 'pending'); assert.match(pending.reason, /頁面已載入 DASH/); assert.match(pending.reason, /尚未確認是否加密/);
+  assert.deepEqual(JSON.parse(JSON.stringify(pending.sourceDiagnostic)), { hlsCount: 0, dashCount: 1, playerReadyState: 4, playerPaused: false, mediaKeysAttached: true });
+  assert(!JSON.stringify(pending).includes('private')); assert(!JSON.stringify(pending).includes('udemycdn')); assert.equal(f.video.pauseCount, 0);
+});
+
+test('format diagnostics observe allowed buffered sources and ignore foreign or invalid destinations', async () => {
+  const f = fixture({ initialResources: [] }); const catalog = await f.api.collect(f.location.href); const item = catalog.sections[0].items[0];
+  await f.api.activate(item);
+  f.resources.push({ name: `${f.location.origin}/assets/9000/manifest.mpd?token=private`, startTime: f.clock.value });
+  f.emit([
+    { name: 'https://example.com/manifest.mpd', startTime: f.clock.value },
+    { name: 'https://udemycdn.com.example.com/manifest.mpd', startTime: f.clock.value },
+    { name: 'http://video.udemycdn.com/manifest.mpd', startTime: f.clock.value },
+    { name: 'https://name:password@video.udemycdn.com/manifest.mpd', startTime: f.clock.value },
+    { name: 'https://video.udemycdn.com:8443/manifest.mpd', startTime: f.clock.value }
+  ]);
+  const pending = f.api.capture(item);
+  assert.equal(pending.sourceDiagnostic.dashCount, 1); assert.equal(pending.sourceDiagnostic.hlsCount, 0);
+});
+
+test('mixed HLS and DASH observations do not claim only DASH and never broaden download candidates', async () => {
+  const f = fixture({ initialResources: [] }); const catalog = await f.api.collect(f.location.href); const item = catalog.sections[0].items[0];
+  await f.api.activate(item);
+  f.emit([
+    { name: 'https://video.udemycdn.com/assets/9000/manifest.m3u8?private', startTime: f.clock.value },
+    { name: 'https://video.udemycdn.com/assets/9000/manifest.mpd?private', startTime: f.clock.value }
+  ]);
+  const pending = f.api.capture(item);
+  assert.equal(pending.status, 'pending'); assert.equal(pending.sourceDiagnostic.hlsCount, 1); assert.equal(pending.sourceDiagnostic.dashCount, 1);
+  assert.doesNotMatch(pending.reason, /頁面已載入 DASH/); assert.equal(f.video.pauseCount, 0);
+  f.emit([{ name: `${f.location.origin}/assets/9000/manifest.m3u8?matching=private`, startTime: f.clock.value }]);
+  const ready = f.api.capture(item);
+  assert.equal(ready.status, 'ready'); assert.equal(ready.candidates.length, 1); assert(ready.candidates[0].url.startsWith(f.location.origin));
+});
+
+test('format observation cache stays bounded and ignores hints before a lecture activation', async () => {
+  const f = fixture({ initialResources: [] }); const catalog = await f.api.collect(f.location.href); const first = catalog.sections[0].items[0];
+  await f.api.activate(first);
+  f.emit(Array.from({ length: 120 }, (_, index) => ({ name: `https://video.udemycdn.com/${index}/manifest.mpd`, startTime: 1 })));
+  assert.equal(f.api.capture(first).sourceDiagnostic.dashCount, 96);
+  const next = catalog.sections[1].items[0];
+  f.allRows[2].play.onclick = () => {
+    f.location.href = `${f.location.origin}/course/example-course/learn/lecture/${next.lectureId}`;
+    f.allRows.forEach(entry => { entry.row.attrs['aria-current'] = entry.id === next.lectureId ? 'true' : 'false'; });
+    f.video.id = 'lecture-9200'; f.region.attrs['aria-label'] = 'Lecture: API requests';
+  };
+  await f.api.activate(next);
+  const pending = f.api.capture(next);
+  assert.equal(pending.sourceDiagnostic.dashCount, 0); assert.doesNotMatch(pending.reason, /頁面已載入 DASH/);
 });
 
 test('capture without activation requires two stable polls even with mediaKeys attached', async () => {

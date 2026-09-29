@@ -4,6 +4,7 @@
   if (globalThis.UdemyCoursePage?.version === version) return;
   const MAX_OBSERVED = 96;
   const observed = new Map();
+  const observedFormats = new Map();
   let operation = 0;
   let catalogCourse = null;
   let activation = null;
@@ -223,7 +224,21 @@
       return { url: url.href, at: Number(entry.startTime) || 0, isMaster: !url.pathname.includes('/hls/'), assetId };
     } catch { return null; }
   }
+  function retainFormat(target, entry) {
+    try {
+      const url = new URL(entry.name);
+      if (url.protocol !== 'https:' || url.username || url.password || url.port || !/(^|\.)(udemy\.com|udemycdn\.com)$/i.test(url.hostname)) return;
+      const format = /\.m3u8$/i.test(url.pathname) ? 'hls' : /\.mpd$/i.test(url.pathname) ? 'dash' : null;
+      if (!format) return;
+      const at = Number(entry.startTime) || 0;
+      if (target.has(url.href) && target.get(url.href).at > at) return;
+      target.delete(url.href);
+      target.set(url.href, { format, at });
+      while (target.size > MAX_OBSERVED) target.delete(target.keys().next().value);
+    } catch { /* Format hints never make an invalid resource downloadable. */ }
+  }
   function retainResource(entry) {
+    retainFormat(observedFormats, entry);
     const value = resourceEntry(entry);
     if (!value) return;
     observed.delete(value.url);
@@ -258,7 +273,9 @@
       if (performance.now() - fallback.at < 200) return { status: 'pending', reason: '等待再次確認講座與播放器一致。' };
     }
     const candidates = new Map(observed);
+    const formats = new Map(observedFormats);
     for (const entry of performance.getEntriesByType('resource')) {
+      retainFormat(formats, entry);
       const value = resourceEntry(entry);
       if (value && (!candidates.has(value.url) || candidates.get(value.url).at < value.at)) candidates.set(value.url, value);
     }
@@ -270,7 +287,19 @@
       // this lecture's stream is encrypted; playlist and segment validation
       // make that decision after the matching resource is available.
       const mediaKeysAttached = Boolean(player.video.mediaKeys);
-      return { status: 'pending', mediaKeysAttached, reason: mediaKeysAttached
+      const recentFormats = Array.from(formats.values()).filter(entry => entry.at >= threshold);
+      // These are page-level format observations, not proof that a source
+      // belongs to this lecture or is encrypted. Keep URLs inside the adapter.
+      const sourceDiagnostic = {
+        hlsCount: recentFormats.filter(entry => entry.format === 'hls').length,
+        dashCount: recentFormats.filter(entry => entry.format === 'dash').length,
+        playerReadyState: Number.isInteger(player.video.readyState) && player.video.readyState >= 0 && player.video.readyState <= 4 ? player.video.readyState : 0,
+        playerPaused: Boolean(player.video.paused),
+        mediaKeysAttached
+      };
+      return { status: 'pending', mediaKeysAttached, sourceDiagnostic, reason: sourceDiagnostic.dashCount > 0 && sourceDiagnostic.hlsCount === 0
+        ? '頁面已載入 DASH（.mpd）來源，目前工具只支援 HLS；尚未確認是否加密。'
+        : mediaKeysAttached
         ? '播放器已連接媒體保護模組，但尚未取得這堂講座的 HLS 清單，無法判定串流是否加密。'
         : '等待這堂講座的 HLS 清單載入。' };
     }

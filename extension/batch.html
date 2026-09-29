@@ -20,12 +20,12 @@
     <p id="current">等待開始</p><progress id="lecture-progress" max="1" value="0" aria-label="目前講座進度"></progress>
     <p class="small">下載時保持這個頁面和原課程分頁開啟，請勿手動切換講座。工具會依序切換講座，可能改變最近觀看位置。可停止後再按開始；已完成的項目會保留，未完成的單堂會重新下載。已有非空白同名檔案會略過，不會覆寫，也不會視為已驗證完成。</p>
   </section>
+  <details id="diagnostics" class="card" hidden><summary>最近一次錯誤診斷</summary><button id="copy-diagnostic" class="secondary">複製診斷</button><pre id="diagnostic-text"></pre></details>
   <section id="catalog-card" class="card" hidden>
     <div class="catalog-heading"><h2>章節與講座</h2><span id="selection"></span></div>
     <div class="buttons"><button id="all" class="secondary">全選影片</button><button id="none" class="secondary">取消全選</button><button id="remaining" class="secondary">選取未完成</button></div>
     <p class="small">教材、測驗等非影片項目會列出供核對；此流程只儲存影片。</p>
     <div id="sections"></div>
   </section>
-  <details id="diagnostics" class="card" hidden><summary>最近一次錯誤診斷</summary><button id="copy-diagnostic" class="secondary">複製診斷</button><pre id="diagnostic-text"></pre></details>
   <p class="small">支援目前可播放、未加密且影音合併的 MPEG-TS HLS。遇到加密、DRM 或不支援的格式，該堂會標示失敗，不會嘗試解密。輸出 .ts 可用 VLC 播放；各堂開始時才取得新網址。</p>
 </main><script type="module" src="batch.js"></script></body></html>
