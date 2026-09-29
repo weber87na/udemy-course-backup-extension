@@ -16,6 +16,7 @@ Thumbs.db
 /backups/
 /udemy-check-*.json
 /udemy-course-progress-*.json
+/library-*.local.*
 *.ts
 *.mp4
 *.m3u8

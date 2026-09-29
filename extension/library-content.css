@@ -1,0 +1,24 @@
+:host { display: block; color-scheme: light; font-family: "Segoe UI", "Noto Sans TC", Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #203d36; text-align: left; }
+:host([hidden]) { display: none; }
+* { box-sizing: border-box; }
+.udemy-backup-library-panel { margin: 18px 0 24px; padding: 20px; border: 1px solid #cbded5; border-radius: 12px; background: #f2f7f4; }
+h2 { margin: 0 0 8px; font-size: 20px; line-height: 1.4; color: #203d36; }
+p { margin: 8px 0; }
+.udemy-backup-library-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+button { appearance: none; position: relative; z-index: 1; padding: 8px 12px; border: 1px solid #bdcec5; border-radius: 7px; background: #fff; color: #204f40; font: inherit; font-weight: 600; line-height: 1.4; cursor: pointer; }
+button:hover { background: #e8f3ed; border-color: #447b64; }
+button:focus-visible { outline: 3px solid #7358ac; outline-offset: 3px; }
+button:disabled { opacity: .55; cursor: default; }
+.udemy-backup-library-panel .udemy-backup-library-actions button:first-child { background: #24664f; color: #fff; border-color: #24664f; }
+.udemy-backup-library-count { margin-top: 14px; font-size: 13px; color: #53685f; }
+.udemy-backup-library-feedback { color: #5a4077; }
+.udemy-backup-library-feedback:empty { display: none; }
+.udemy-backup-library-card { position: relative; z-index: 1; margin: 10px 0 0; padding: 12px; border: 1px solid #d6e2dc; border-radius: 8px; background: #f7faf8; }
+.udemy-backup-library-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; background: #e5ece8; color: #3d5549; font-size: 13px; }
+[data-tone="good"] .udemy-backup-library-badge { color: #176044; background: #dbf1e4; }
+[data-tone="bad"] .udemy-backup-library-badge { color: #943b35; background: #fbe5e2; }
+[data-tone="warning"] .udemy-backup-library-badge { color: #785311; background: #fff0cb; }
+.udemy-backup-library-detail { font-size: 12px; color: #53685f; overflow-wrap: anywhere; }
+.udemy-backup-library-card .udemy-backup-library-actions { gap: 6px; margin-top: 8px; }
+.udemy-backup-library-card button { padding: 5px 9px; font-size: 12px; }
+@media (prefers-reduced-motion: no-preference) { button { transition: background-color .12s; } }

@@ -14,6 +14,13 @@
   </header>
   <main>
     <section class="course">
+      <h2>我的課程下載標示</h2>
+      <p class="muted">在課程卡片查看可下載、不可下載與尚未確認，支援抽查或逐堂檢查。</p>
+      <button id="library-enable" class="primary">啟用我的課程標示</button>
+      <p id="library-feedback" role="status" class="muted"></p>
+    </section>
+    <div id="lecture-tools">
+    <section class="course">
       <div class="label">目前課程</div>
       <h2 id="course-title">正在讀取…</h2>
       <p id="lecture-title"></p>
@@ -45,6 +52,7 @@
       <button id="export" class="link" disabled>匯出本次檢查 JSON</button>
       <a href="https://support.udemy.com/hc/en-us/articles/229231167-How-to-Download-Lectures-to-a-Computer-if-Enabled" target="_blank" rel="noreferrer">Udemy 下載說明 ↗</a>
     </footer>
+    </div>
   </main>
   <script type="module" src="popup.js"></script>
 </body>

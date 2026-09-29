@@ -4,10 +4,17 @@ const $ = id => document.getElementById(id);
 let targetTabId;
 let scan;
 let busy = false;
+let activePageUrl='';
 
-function feedback(text) { $('feedback').textContent = text; }
+function libraryPage(value) {
+  try {const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&/(^|\.)udemy\.com$/i.test(u.hostname)&&/^\/home\/my-courses\/learning\/?$/.test(u.pathname);}
+  catch{return false;}
+}
+
+function feedback(text) { $('feedback').textContent = text; if(text&&$('lecture-tools').hidden)$('library-feedback').textContent=text; }
 
 function controls() {
+  $('library-enable').disabled=busy;
   $('refresh').disabled = busy || !targetTabId;
   $('inspect-menu').disabled = busy || !scan?.settingsAvailable;
   $('export').disabled = busy || !scan;
@@ -17,6 +24,19 @@ function controls() {
     button.disabled = busy || button.dataset.unavailable === 'true' || button.dataset.sent === 'true';
   }
 }
+
+$('library-enable').addEventListener('click',()=>{
+  if(busy)return;
+  const permission=chrome.permissions.request({origins:['https://*.udemy.com/*','https://*.udemycdn.com/*']});
+  run(async()=>{
+    if(!await permission){$('library-feedback').textContent='需要網站權限才能在課程卡片顯示檢查結果。';return;}
+    const registered=await chrome.scripting.getRegisteredContentScripts({ids:['udemy-library-labels']});
+    if(!registered.length)await chrome.scripting.registerContentScripts([{id:'udemy-library-labels',matches:['https://*.udemy.com/home/*'],js:['library-content.js'],runAt:'document_idle',persistAcrossSessions:true}]);
+    if(targetTabId&&libraryPage(activePageUrl))await chrome.scripting.executeScript({target:{tabId:targetTabId},files:['library-content.js']});
+    else await chrome.tabs.create({url:'https://www.udemy.com/home/my-courses/learning/'});
+    $('library-feedback').textContent='已啟用。請在我的課程頁按卡片「抽查」或「逐堂檢查」。';
+  }).catch(()=>{});
+});
 
 async function run(action) {
   if (busy) return;
@@ -156,6 +176,13 @@ $('export').addEventListener('click', () => run(async () => {
 run(async () => {
   if (!globalThis.chrome?.scripting) throw new Error('請在 Chrome 載入擴充功能，再從 Udemy 課程頁點擊工具圖示。');
   const [active] = await chrome.tabs.query({active:true,currentWindow:true});
+  activePageUrl=active?.url||'';
+  if(active?.id&&libraryPage(activePageUrl)){
+    targetTabId=active.id;
+    $('lecture-tools').hidden=true;
+    $('library-feedback').textContent='按上方按鈕啟用卡片標示；已啟用時可回到網頁直接檢查。';
+    return;
+  }
   if (!active?.id || !supportedPage(active.url)) {
     $('course-title').textContent = '請先開啟 Udemy 課程';
     $('status-title').textContent = '目前分頁不是課程播放器';
