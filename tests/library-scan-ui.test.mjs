@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { STORAGE_PREFIX, normalizeCourse, sanitizeRecord, summarizeRecord, reasonLabel } from '../extension/library-core.mjs';
+import { STORAGE_PREFIX, normalizeCourse, sanitizeRecord, summarizeRecord, reasonLabel, diagnosticCode } from '../extension/library-core.mjs';
 import { checkCourse } from '../extension/library-scan-io.mjs';
 import { withBatchLock, abortIfNeeded } from '../extension/batch-io.mjs';
 import { LIBRARY_ORIGINS } from '../extension/library-background.mjs';
@@ -37,7 +37,7 @@ async function fixture(options = {}) {
   const windowListeners = new Map();
   let gesture = false;
   const chrome = {
-    runtime: { getManifest: () => ({ version: '0.5.0-test' }), sendMessage: async message => { messages.push(structuredClone(message)); return options.workerResponse || { ok: true, tab: { id: 91 } }; } },
+    runtime: { getManifest: () => ({ version: '0.5.0-test' }), sendMessage: async message => { messages.push(structuredClone(message)); if(options.workerError)throw options.workerError;return options.workerResponse || { ok: true, tab: { id: 91 } }; } },
     permissions: { request: () => { gestures.push({ active: gesture }); return options.permission || Promise.resolve(true); } },
     tabs: { getCurrent: async () => ({ id: 55 }), update: async (id, value) => tabUpdates.push([id, value]), create: async value => { directCreates.push(value); throw new Error('The scanner page must delegate owned tabs to background'); } },
     storage: {
@@ -64,7 +64,7 @@ async function fixture(options = {}) {
     document: { getElementById: $, createElement: tag => new Element(tag) },
     window: { addEventListener: (type, callback) => { if (!windowListeners.has(type)) windowListeners.set(type, []); windowListeners.get(type).push(callback); } },
     location: { href: `chrome-extension://test/library-scan.html?job=${jobKey}` },
-    STORAGE_PREFIX, normalizeCourse, sanitizeRecord, summarizeRecord, reasonLabel, createInspector, checkCourse, withBatchLock, abortIfNeeded, LIBRARY_ORIGINS
+    STORAGE_PREFIX, normalizeCourse, sanitizeRecord, summarizeRecord, reasonLabel, diagnosticCode, createInspector, checkCourse, withBatchLock, abortIfNeeded, LIBRARY_ORIGINS
   });
   vm.runInContext(source, context, { filename: 'library-scan.js' });
   const state = expression => vm.runInContext(expression, context);
@@ -134,6 +134,8 @@ test('an existing course backup lock prevents media inspection and persists an u
   assert.equal(f.collections.length, 1); assert.equal(f.inspections.length, 0);
   assert.equal(f.local[STORAGE_PREFIX + f.key].finished, false); assert.deepEqual(f.local[STORAGE_PREFIX + f.key].results, []);
   assert.equal(f.row().label.textContent, '尚未確認'); assert.match(f.row().detail.textContent, /其他備份工作/); assert(f.inspectors[0].closeCount > 0);
+  assert.equal(f.local[STORAGE_PREFIX + f.key].issue, 'lock-unavailable');
+  assert.match(f.$('status').textContent, /1 門課皆仍有未確認結果/);
 });
 
 test('worker creation delegates to background with its owner and preserves numeric course identity', async () => {
@@ -147,6 +149,7 @@ test('a rejected worker creation cannot inspect media or show a complete course'
   const f = await fixture({ workerResponse: { ok: false, error: 'blocked' } }); await f.dispatch('start'); await f.settle();
   assert.equal(f.inspections.length, 0); assert.equal(f.row().label.textContent, '尚未確認');
   const stored = f.local[STORAGE_PREFIX + f.key]; assert.equal(stored.finished, false); assert.equal(stored.totalVideos, null); assert.deepEqual(stored.results, []);
+  assert.equal(stored.issue, 'worker-open-failed'); assert.match(f.row().detail.textContent, /無法建立工具的背景課程分頁/);
   assert(f.inspectors[0].closeCount > 0);
 });
 
@@ -157,4 +160,40 @@ test('pagehide aborts the running inspector, closes its worker, and prevents a c
   gate.resolve({ status: 'downloadable', reason: 'hls-supported' }); await running; await f.settle();
   assert.equal(f.local[STORAGE_PREFIX + f.key].finished, false); assert.deepEqual(f.local[STORAGE_PREFIX + f.key].results, []); assert.equal(f.$('progress').value, 0);
   assert.match(f.$('status').textContent, /已停止/); assert.notEqual(f.row().label.textContent, '可下載');
+});
+
+test('a transport error opening the worker becomes a fixed diagnostic without exposing its raw message', async () => {
+  const f = await fixture({ workerError: new Error('chrome detail https://example.test/private?token=secret') });
+  await f.dispatch('start'); await f.settle();
+  assert.equal(f.local[STORAGE_PREFIX+f.key].issue, 'worker-open-failed');
+  assert.match(f.row().detail.textContent, /無法建立工具的背景課程分頁/);
+  assert.doesNotMatch(f.row().detail.textContent, /secret|example\.test|chrome detail/);
+});
+
+test('a saved catalog diagnostic survives the page catch and describes the exact failure', async () => {
+  const f = await fixture({ collect: async()=>{ const failure = new Error('private raw browser diagnostic');failure.code='course-identity-unconfirmed';throw failure; } });
+  await f.dispatch('start'); await f.settle();
+  assert.equal(f.local[STORAGE_PREFIX+f.key].issue, 'course-identity-unconfirmed');
+  assert.match(f.row().detail.textContent, /尚未讀取到課程頁的課程 ID/);
+  assert.doesNotMatch(f.row().detail.textContent, /private raw|或是否已有其他備份工作/);
+  assert.match(f.$('status').textContent, /具體原因/);
+});
+
+test('all unknown samples finish with an explicit unconfirmed total and visible per-lecture reasons', async () => {
+  const courses = [{courseKey,title:'First'}, {courseKey:'https://www.udemy.com/course/second-course',title:'Second'}];
+  const f = await fixture({ courses, inspect: async()=>({status:'unknown',reason:'player-loading'}) });
+  await f.dispatch('start'); await f.settle();
+  assert.match(f.$('status').textContent, /本次 2 門課皆仍有未確認結果/);
+  assert.match(f.row().detail.textContent, /播放器尚未完成載入/);
+  assert.match(f.row().list.textContent, /播放器尚未完成載入/);
+  assert.equal(f.row().label.textContent, '尚未確認');
+});
+
+test('mixed resolved and unknown courses report the unresolved count without claiming universal success', async () => {
+  const courses = [{courseKey,title:'First'}, {courseKey:'https://www.udemy.com/course/second-course',title:'Second'}];
+  let attempt = 0;
+  const f = await fixture({ courses, inspect: async()=> ++attempt === 1 ? {status:'downloadable',reason:'hls-supported'} : {status:'unknown',reason:'playback-blocked'} });
+  await f.dispatch('start'); await f.settle();
+  assert.match(f.$('status').textContent, /2 門課中有 1 門仍有未確認結果/);
+  assert.equal(f.row().label.textContent, '可下載（部分已確認）');
 });

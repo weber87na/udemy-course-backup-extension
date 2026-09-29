@@ -37,7 +37,7 @@ const item = { courseKey: 'https://www.udemy.com/course/example', lectureId: '11
 const hls = (asset = '9000', suffix = '') => ({ name: `https://www.udemy.com/assets/${asset}/manifest${suffix}.m3u8?private=token`, startTime: 10 });
 const dash = (name = 'video') => ({ name: `https://dash-enc-c.udemycdn.com/${name}.mpd?private=token`, startTime: 20 });
 
-function fixture({ entries = [hls()], navigationUrl = pageUrl, initialUrl = pageUrl, mediaKeys = null, rejectPlay = false } = {}) {
+function fixture({ entries = [hls()], navigationUrl = pageUrl, initialUrl = pageUrl, mediaKeys = null, rejectPlay = false, visibilityState = 'visible' } = {}) {
   const clock = { value: 1000 };
   const body = element('body');
   const sidebar = element('div', { id: 'ct-sidebar-scroll-container' });
@@ -48,14 +48,14 @@ function fixture({ entries = [hls()], navigationUrl = pageUrl, initialUrl = page
   const container = element('div', { id: 'shaka-video-container-9000' });
   const video = element('video', { id: 'lecture-9000' });
   Object.assign(video, { readyState: 4, mediaKeys, paused: true, playCount: 0, pauseCount: 0, muted: false });
-  video.play = () => { video.playCount += 1; return rejectPlay ? Promise.reject(new Error('NotAllowedError')) : Promise.resolve(); };
+  video.play = () => { video.playCount += 1; return rejectPlay ? Promise.reject(Object.assign(new Error('Playback denied'), {name: 'NotAllowedError'})) : Promise.resolve(); };
   video.pause = () => { video.pauseCount += 1; };
   container.append(video); region.append(container); body.append(region);
   const location = { href: initialUrl };
   const observers = [];
   const context = vm.createContext({
     URL, Element: ElementFixture, location, getComputedStyle: node => node.style,
-    document: { getElementById: id => body.querySelectorAll(`[id="${id}"]`)[0] || null, querySelectorAll: selector => body.querySelectorAll(selector) },
+    document: { visibilityState, getElementById: id => body.querySelectorAll(`[id="${id}"]`)[0] || null, querySelectorAll: selector => body.querySelectorAll(selector) },
     performance: { now: () => clock.value, getEntriesByType: type => type === 'navigation' ? (navigationUrl === null ? [] : [{ name: navigationUrl }]) : entries },
     PerformanceObserver: class { constructor(callback) { observers.push(callback); } observe() {} }
   });
@@ -227,4 +227,147 @@ test('pause only touches the validated player while the lecture and row still ma
   f.marker.id = 'item-completion-state-11';
   f.video.id = 'lecture-9001'; f.container.id = 'shaka-video-container-9001';
   assert.equal(f.api.pause().ok, false); assert.equal(f.video.pauseCount, before + 1);
+});
+
+test('pending gates expose fixed diagnostic codes without relaxing lecture binding', () => {
+  const cases = [
+    [f => {f.sidebar.hidden = true;}, 'lecture-unconfirmed'],
+    [f => {f.marker.id = 'item-completion-state-12';}, 'lecture-unconfirmed'],
+    [f => {f.video.hidden = true;}, 'player-unavailable'],
+    [f => {f.video.id = ''; f.container.id = '';}, 'asset-unconfirmed'],
+    [f => {f.region.attrs['aria-label'] = 'Wrong title';}, 'player-title-unconfirmed']
+  ];
+  for (const [change, reasonCode] of cases) {
+    const f = fixture(); change(f);
+    assert.equal(f.ready(item, {play: true}).reasonCode, reasonCode);
+    assert.equal(f.video.playCount, 0);
+  }
+  assert.equal(fixture({entries: []}).ready().reasonCode, 'source-unconfirmed');
+  assert.equal(fixture({entries: [dash(), dash('other')]}).ready().reasonCode, 'source-ambiguous');
+  const loading = fixture({entries: [dash()]}); loading.video.readyState = 0;
+  assert.equal(loading.ready().reasonCode, 'player-loading');
+  const switched = fixture(); switched.location.href = pageUrl.replace('/11', '/12');
+  assert.throws(() => switched.inspect(), error => error.code === 'source-page-changed');
+  assert.throws(() => fixture().inspect({...item, lectureId: '12'}), error => error.code === 'lecture-unconfirmed');
+});
+
+test('transient playback failure retries after at least one second and can recover a matching HLS source', async () => {
+  const f = fixture({entries: []});
+  f.video.play = () => {
+    f.video.playCount++;
+    if (f.video.playCount === 1) return Promise.reject(Object.assign(new Error('Source is changing'), {name: 'AbortError'}));
+    f.entries.push(hls()); return Promise.resolve();
+  };
+  f.ready(item, {play: true}); await Promise.resolve();
+  f.clock.value += 999;
+  assert.equal(f.inspect(item, {play: true}).reasonCode, 'player-loading'); assert.equal(f.video.playCount, 1);
+  f.clock.value += 1;
+  const result = f.inspect(item, {play: true}); await Promise.resolve();
+  assert.equal(f.video.playCount, 2); assert.equal(result.kind, 'hls'); assert.equal(result.status, 'ready');
+  f.clock.value += 2000; f.inspect(item, {play: true});
+  assert.equal(f.video.playCount, 2);
+});
+
+test('repeated playback failures stop after three attempts and never leak exception text', async () => {
+  const f = fixture({entries: []});
+  f.video.play = () => {f.video.playCount++; return Promise.reject(new Error('https://private.invalid/?token=secret'));};
+  f.ready(item, {play: true}); await Promise.resolve();
+  for (let index = 0; index < 6; index++) {
+    f.clock.value += 1000; f.inspect(item, {play: true}); await Promise.resolve();
+  }
+  const result = f.inspect(item, {play: true});
+  assert.equal(f.video.playCount, 3); assert.equal(result.reasonCode, 'player-unavailable');
+  assert.doesNotMatch(JSON.stringify(result), /private|secret|https/);
+});
+
+test('NotAllowedError is reported as blocked and never retried for asynchronous or synchronous play failures', async () => {
+  for (const synchronous of [false, true]) {
+    const f = fixture({entries: []});
+    f.video.play = () => {
+      f.video.playCount++; const error = Object.assign(new Error('denied'), {name: 'NotAllowedError'});
+      if (synchronous) throw error;
+      return Promise.reject(error);
+    };
+    f.ready(item, {play: true}); await Promise.resolve();
+    for (let index = 0; index < 4; index++) {
+      f.clock.value += 1500;
+      assert.equal(f.inspect(item, {play: true}).reasonCode, 'playback-blocked');
+    }
+    assert.equal(f.video.playCount, 1); assert.equal(f.video.muted, true);
+  }
+});
+
+test('a pending playback promise does not create overlapping retries', async () => {
+  const f = fixture({entries: []}); let reject;
+  f.video.play = () => {f.video.playCount++; return new Promise((_, fail) => {reject = fail;});};
+  f.ready(item, {play: true});
+  f.clock.value += 5000;
+  assert.equal(f.inspect(item, {play: true}).reasonCode, 'player-loading'); assert.equal(f.video.playCount, 1);
+  reject(Object.assign(new Error('Replaced source'), {name: 'AbortError'})); await Promise.resolve();
+  f.inspect(item, {play: true}); assert.equal(f.video.playCount, 2);
+});
+
+test('replacement players still require stable binding and share the three-attempt document budget', async () => {
+  const f = fixture({entries: []}); let calls = 0;
+  const play = () => {calls++; return Promise.reject(Object.assign(new Error('Loading'), {name: 'AbortError'}));};
+  f.video.play = play; f.ready(item, {play: true}); await Promise.resolve();
+  for (let index = 0; index < 4; index++) {
+    const replacement = element('video', {id: 'lecture-9000'});
+    replacement.readyState = 0; replacement.play = play; replacement.pause = () => {};
+    f.container.children[0].isConnected = false;
+    f.container.children = []; f.container.append(replacement);
+    f.clock.value += 1000;
+    const before = calls;
+    assert.equal(f.inspect(item, {play: true}).reasonCode, 'player-loading'); assert.equal(calls, before);
+    f.clock.value += 200; f.inspect(item, {play: true}); await Promise.resolve();
+  }
+  assert.equal(calls, 3);
+  assert.equal(f.inspect(item, {play: true}).reasonCode, 'player-unavailable');
+});
+
+test('only a stable hidden player with an actual pending play request asks for foreground', () => {
+  const f = fixture({entries: [], visibilityState: 'hidden'});
+  f.video.play = () => {f.video.playCount++; return new Promise(() => {});};
+  assert.equal(f.inspect(item, {play: true}).needsForeground, undefined);
+  f.clock.value += 200;
+  const pending = f.inspect(item, {play: true});
+  assert.equal(pending.reasonCode, 'player-loading'); assert.equal(pending.needsForeground, true);
+  assert.equal(f.video.playCount, 1);
+  f.context.document.visibilityState = 'visible';
+  assert.equal(f.inspect(item, {play: true}).needsForeground, undefined);
+  f.context.document.visibilityState = 'hidden';
+  f.entries.push(hls());
+  const ready = f.inspect(item, {play: true});
+  assert.equal(ready.status, 'ready'); assert.equal(ready.needsForeground, undefined);
+});
+
+test('hidden retryable playback can request foreground while blocked or exhausted playback cannot', async () => {
+  const f = fixture({entries: [], visibilityState: 'hidden'});
+  f.video.play = () => {f.video.playCount++; return Promise.reject(Object.assign(new Error('Loading'), {name: 'AbortError'}));};
+  f.ready(item, {play: true}); await Promise.resolve();
+  assert.equal(f.inspect(item, {play: true}).needsForeground, true);
+  for (let index = 0; index < 2; index++) {f.clock.value += 1000; f.inspect(item, {play: true}); await Promise.resolve();}
+  const exhausted = f.inspect(item, {play: true});
+  assert.equal(exhausted.reasonCode, 'player-unavailable'); assert.equal(exhausted.needsForeground, undefined);
+  const blocked = fixture({entries: [], visibilityState: 'hidden', rejectPlay: true});
+  blocked.ready(item, {play: true}); await Promise.resolve();
+  const denied = blocked.inspect(item, {play: true});
+  assert.equal(denied.reasonCode, 'playback-blocked'); assert.equal(denied.needsForeground, undefined);
+});
+
+test('hidden pages with ambiguous sources, missing binding, or no play request never ask for foreground', () => {
+  for (const entries of [[], [dash(), dash('other')], [hls('8000'), dash()]]) {
+    const f = fixture({entries, visibilityState: 'hidden'});
+    assert.equal(f.ready().needsForeground, undefined);
+  }
+  const ambiguous = fixture({entries: [dash(), dash('other')], visibilityState: 'hidden'});
+  ambiguous.video.play = () => new Promise(() => {});
+  assert.equal(ambiguous.ready(item, {play: true}).needsForeground, undefined);
+  const missing = fixture({entries: [], visibilityState: 'hidden'});
+  missing.video.play = () => new Promise(() => {});
+  missing.ready(item, {play: true});
+  missing.marker.id = 'item-completion-state-12';
+  assert.equal(missing.inspect(item, {play: true}).needsForeground, undefined);
+  missing.marker.id = 'item-completion-state-11'; missing.video.id = 'lecture-9001';
+  assert.equal(missing.inspect(item, {play: true}).needsForeground, undefined);
 });

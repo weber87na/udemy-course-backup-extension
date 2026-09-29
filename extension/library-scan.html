@@ -9,7 +9,7 @@
     <div class="buttons"><button id="start" disabled>開始檢查</button><button id="stop" class="secondary" disabled>停止</button><button id="source" class="secondary" disabled>返回我的課程</button></div>
     <p id="status" role="status" aria-live="polite">準備檢查</p><progress id="progress" max="1" value="0" aria-label="課程檢查進度"></progress>
     <p id="error" role="alert" hidden></p>
-    <p class="small">保持本頁開啟。工具使用另外建立的課程分頁，完成或停止後會關閉它；不要手動切換該分頁的課程。</p>
+    <p class="small">保持本頁開啟，並讓 Chrome 視窗保持可見。若背景播放器等待啟動，工具會短暫顯示自己建立的課程分頁；取得來源後返回原分頁，完成或停止後關閉檢查分頁。不要手動切換檢查分頁的課程。</p>
   </section>
   <section class="card"><h2>檢查結果</h2><div id="courses"></div></section>
 </main><script type="module" src="library-scan.js"></script></body></html>

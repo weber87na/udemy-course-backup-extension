@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {STORAGE_PREFIX, normalizeCourse, sanitizeRecord, summarizeRecord, reasonLabel} from '../extension/library-core.mjs';
+import {STORAGE_PREFIX, normalizeCourse, sanitizeRecord, summarizeRecord, reasonLabel, diagnosticCode} from '../extension/library-core.mjs';
 
 const courseKey = 'https://www.udemy.com/course/fixture-course';
 const now = 1_800_000_000_000;
@@ -100,4 +100,23 @@ test('one-day old or implausibly future summaries need a recheck', () => {
   assert.equal(summarizeRecord(record(), now + 86400000).label, '需重新檢查');
   assert.equal(summarizeRecord(record(), now + 86399999).label, '可下載');
   assert.equal(summarizeRecord(record({checkedAt: now + 300001}), now).label, '需重新檢查');
+});
+
+test('fixed run issues and unknown lecture reasons remain visible without arbitrary errors', () => {
+  const safe = sanitizeRecord(record({totalVideos: null, catalogComplete: false, finished: false, results: [], issue: 'course-identity-unconfirmed',
+    error: 'https://private.invalid/?token=secret'}));
+  assert.equal(safe.issue, 'course-identity-unconfirmed');
+  assert.ok(!JSON.stringify(safe).includes('private.invalid'));
+  assert.match(summarizeRecord(safe, now).detail, /尚未讀取到課程頁的課程 ID/);
+  assert.match(summarizeRecord(record({results: [result(1, 'unknown', 'playback-blocked'), result(2, 'unknown', 'page-script-failed')]}), now).detail, /Chrome 未允許.*網站權限/);
+  assert.equal(sanitizeRecord(record({issue: 'https://private.invalid/?token=secret'})), null);
+  assert.equal(sanitizeRecord(record({issue: 'hls-supported'})), null);
+  assert.notEqual(summarizeRecord(record({issue: 'source-page-changed'}), now).label, '可下載');
+  assert.equal(diagnosticCode('page-script-failed'), 'page-script-failed');
+  assert.equal(diagnosticCode('https://private.invalid/', 'network'), 'network');
+  assert.equal(diagnosticCode('hls-supported', 'network'), 'network');
+  assert.equal(diagnosticCode('constructor', 'constructor'), 'source-unconfirmed');
+  assert.equal(reasonLabel('constructor'), reasonLabel('source-unconfirmed'));
+  assert.equal(diagnosticCode('player-background'), 'player-background');
+  assert.match(summarizeRecord(record({results: [result(1, 'unknown', 'player-background'), result(2, 'unknown', 'network')]}), now).detail, /Chrome 視窗保持可見/);
 });

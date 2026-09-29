@@ -1,4 +1,4 @@
-import {STORAGE_PREFIX,normalizeCourse,sanitizeRecord,summarizeRecord,reasonLabel} from './library-core.mjs';
+import {STORAGE_PREFIX,normalizeCourse,sanitizeRecord,summarizeRecord,reasonLabel,diagnosticCode} from './library-core.mjs';
 import {createInspector,checkCourse} from './library-scan-io.mjs';
 import {withBatchLock,abortIfNeeded} from './batch-io.mjs';
 import {LIBRARY_ORIGINS} from './library-background.mjs';
@@ -8,6 +8,7 @@ let job,busy=false,controller,inspector,ownerTabId;
 $('version').textContent=`v${chrome.runtime.getManifest().version}`;
 function error(message=''){$('error').textContent=message;$('error').hidden=!message;}
 function controls(){$('start').disabled=busy||!job;$('stop').disabled=!busy||controller?.signal.aborted;$('source').disabled=!job;}
+function codedError(code){const failure=new Error(reasonLabel(code));failure.code=code;return failure;}
 function render(record) {
   const row=rows.get(record.courseKey);if(!row)return;
   const summary=summarizeRecord(record);
@@ -27,34 +28,55 @@ $('start').addEventListener('click',async()=>{
   if(busy||!job)return;
   const permission=chrome.permissions.request({origins:LIBRARY_ORIGINS});
   busy=true;controller=new AbortController();controls();error();
-  let done=0;
+  let done=0,unconfirmed=0;
+  $('progress').value=0;
   try {
     if(!await permission)throw new Error('需要 Udemy 與 Udemy CDN 讀取權限才能檢查。');
     await navigator.locks.request('udemy-library-scan',{ifAvailable:true},async lock=>{
       if(!lock)throw new Error('已有另一個課程檢查執行中，請先停止該工作。');
       for(const course of job.courses){
         abortIfNeeded(controller.signal);
+        let lastRecord=null;
         $('status').textContent=`${done+1} / ${job.courses.length}：${course.title}，正在讀取目錄…`;
         inspector=createInspector(chrome,{signal:controller.signal,openTab:async({url})=>{
-          const result=await chrome.runtime.sendMessage({type:'library-open-worker',ownerTabId,url});
-          if(!result?.ok||!Number.isInteger(result.tab?.id))throw new Error('無法建立課程檢查分頁。');
+          let result;
+          try{result=await chrome.runtime.sendMessage({type:'library-open-worker',ownerTabId,url});}
+          catch{throw codedError('worker-open-failed');}
+          if(!result?.ok||!Number.isInteger(result.tab?.id))throw codedError('worker-open-failed');
           return result.tab;
         }});
         try {
-          await checkCourse(course,job.mode,{inspector,signal:controller.signal,withCourseLock:(key,action)=>withBatchLock(navigator.locks,`library-${ownerTabId}`,key,action),onRecord:async record=>{
+          await checkCourse(course,job.mode,{inspector,signal:controller.signal,withCourseLock:async(key,action)=>{
+            let entered=false;
+            try{return await withBatchLock(navigator.locks,`library-${ownerTabId}`,key,()=>{entered=true;return action();});}
+            catch(failure){if(!entered&&!controller.signal.aborted)throw codedError('lock-unavailable');throw failure;}
+          },onRecord:async record=>{
             const safe=sanitizeRecord(record);if(!safe)throw new Error('檢查資料無效。');
+            lastRecord=safe;
             await chrome.storage.local.set({[STORAGE_PREFIX+safe.courseKey]:safe});render(safe);
             $('status').textContent=`${done+1} / ${job.courses.length}：${course.title}，已檢查 ${safe.results.length} / ${safe.totalVideos??'?'} 堂`;
           }});
         } catch(failure) {
           if(controller.signal.aborted)throw failure;
-          const row=rows.get(course.courseKey);row.label.textContent='尚未確認';row.label.className='scan-label neutral';
-          row.detail.textContent='無法完成檢查，請確認已登入、課程可開啟，或是否已有其他備份工作。';
+          // checkCourse publishes its fixed diagnostic before throwing. Preserve
+          // that evidence instead of replacing it with a generic login message.
+          if(lastRecord){
+            if(!lastRecord.issue)lastRecord={...lastRecord,issue:diagnosticCode(failure.code)};
+            render(lastRecord);
+          } else {
+            const row=rows.get(course.courseKey);row.label.textContent='尚未確認';row.label.className='scan-label neutral';
+            row.detail.textContent=reasonLabel(diagnosticCode(failure.code));
+          }
         } finally {await inspector.close();inspector=null;}
+        if(!lastRecord||!lastRecord.finished||!lastRecord.catalogComplete||lastRecord.issue||!lastRecord.results.length||lastRecord.results.some(item=>item.status==='unknown'))unconfirmed++;
         done++;$('progress').value=done;
       }
     });
-    $('status').textContent='檢查結束，結果已同步到我的課程卡片。';
+    $('status').textContent=unconfirmed===done
+      ? `本次 ${done} 門課皆仍有未確認結果。請查看下方各課程的具體原因；結果已同步到我的課程卡片。`
+      : unconfirmed
+        ? `檢查結束：${done} 門課中有 ${unconfirmed} 門仍有未確認結果，請查看下方原因；結果已同步到我的課程卡片。`
+        : `檢查結束：${done} 門課已取得本次範圍內的來源判定，結果已同步到我的課程卡片。`;
   } catch(failure){
     if(controller.signal.aborted)$('status').textContent='已停止。已檢查結果保留，未完成課程不會標成整課可下載。';
     else {error(String(failure.message||'無法開始檢查。').replace(/https?:\/\/\S+/g,'[網址已隱藏]'));$('status').textContent='檢查未完成。';}

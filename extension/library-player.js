@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const version = 'library-player-v1';
+  const version = 'library-player-v2';
   if (globalThis.UdemyLibraryPlayer?.version === version) return;
 
   const LIMIT = 96;
@@ -10,7 +10,10 @@
   let manifestOverflow = false;
   let lockedItem = null;
   let stable = null;
-  let played = false;
+  let playAttempts = 0;
+  let lastPlayAt = -Infinity;
+  let playback = null;
+  let playbackBlocked = false;
   let invalidated = false;
 
   function text(value) {
@@ -76,54 +79,91 @@
     }
   } catch { /* Resource timing remains available as a fallback. */ }
 
-  function pending(reason) { stable = null; return { status: 'pending', reason }; }
+  function pending(reason, reasonCode, reset = false) {
+    if (reset) stable = null;
+    return { status: 'pending', reason, reasonCode };
+  }
+  function fail(reason, code) { throw Object.assign(new Error(reason), { code }); }
   function bind(item) {
     const current = courseAt(location.href);
     if (invalidated || !sameLecture(initial, current) || (navigation !== null && !sameLecture(initial, navigation))) {
       invalidated = true;
-      throw new Error('檢查分頁不是這堂講座的完整重新載入，請重新開啟檢查分頁。');
+      fail('檢查分頁不是這堂講座的完整重新載入，請重新開啟檢查分頁。', 'source-page-changed');
     }
-    if (!item || typeof item.lectureId !== 'string' || !/^\d+$/.test(item.lectureId) || !text(item.title) || !sameLecture(current, item)) throw new Error('講座資料與檢查分頁不一致。');
-    if (lockedItem && (!sameLecture(lockedItem, item) || lockedItem.title !== text(item.title))) throw new Error('這個檢查分頁已綁定其他講座，請完整重新載入。');
+    if (!item || typeof item.lectureId !== 'string' || !/^\d+$/.test(item.lectureId) || !text(item.title) || !sameLecture(current, item)) fail('講座資料與檢查分頁不一致。', 'lecture-unconfirmed');
+    if (lockedItem && (!sameLecture(lockedItem, item) || lockedItem.title !== text(item.title))) fail('這個檢查分頁已綁定其他講座，請完整重新載入。', 'lecture-unconfirmed');
     lockedItem ||= { courseKey: item.courseKey, lectureId: item.lectureId, title: text(item.title) };
     const sidebar = document.getElementById('ct-sidebar-scroll-container');
-    if (!visible(sidebar)) return { pending: '等待可見的課程內容側欄。' };
+    if (!visible(sidebar)) return { pending: '等待可見的課程內容側欄。', reasonCode: 'lecture-unconfirmed' };
     const rows = Array.from(sidebar.querySelectorAll('li[aria-current="true"]')).filter(visible);
-    if (rows.length !== 1) return { pending: '等待課程目錄確認唯一的目前講座。' };
+    if (rows.length !== 1) return { pending: '等待課程目錄確認唯一的目前講座。', reasonCode: 'lecture-unconfirmed' };
     const markers = Array.from(rows[0].querySelectorAll('[id^="item-completion-state-"]'));
-    if (markers.length !== 1 || markers[0].id !== `item-completion-state-${item.lectureId}`) return { pending: '等待課程目錄顯示對應講座。' };
+    if (markers.length !== 1 || markers[0].id !== `item-completion-state-${item.lectureId}`) return { pending: '等待課程目錄顯示對應講座。', reasonCode: 'lecture-unconfirmed' };
     const videos = Array.from(document.querySelectorAll('video')).filter(visible);
-    if (videos.length !== 1) return { pending: '等待唯一可辨識的影片播放器。' };
+    if (videos.length !== 1) return { pending: '等待唯一可辨識的影片播放器。', reasonCode: 'player-unavailable' };
     const video = videos[0];
     const videoAsset = /^lecture-(\d+)$/.exec(video.id || '')?.[1];
     const parentAsset = /^shaka-video-container-(\d+)$/.exec(video.parentElement?.id || '')?.[1];
-    if (videoAsset && parentAsset && videoAsset !== parentAsset) return { pending: '等待播放器影片識別一致。' };
+    if (videoAsset && parentAsset && videoAsset !== parentAsset) return { pending: '等待播放器影片識別一致。', reasonCode: 'asset-unconfirmed' };
     const assetId = videoAsset || parentAsset;
-    if (!assetId) return { pending: '等待播放器影片識別。' };
+    if (!assetId) return { pending: '等待播放器影片識別。', reasonCode: 'asset-unconfirmed' };
     const region = video.closest('section[aria-label], [role="region"][aria-label]');
     const title = text(region?.getAttribute('aria-label'));
-    if (!region || !title.endsWith(text(item.title))) return { pending: '等待播放器顯示對應的講座標題。' };
+    if (!region || !title.endsWith(text(item.title))) return { pending: '等待播放器顯示對應的講座標題。', reasonCode: 'player-title-unconfirmed' };
     return { current, video, assetId, title, row: rows[0] };
+  }
+
+  function tryPlayback(video) {
+    const at = performance.now();
+    if (playbackBlocked || playAttempts >= 3 || at - lastPlayAt < 1000) return;
+    if (playback?.video === video && playback.state !== 'retryable') return;
+    const attempt = { video, state: 'pending' };
+    playback = attempt;
+    playAttempts += 1;
+    lastPlayAt = at;
+    const failed = error => {
+      if (playback !== attempt) return;
+      playbackBlocked = error?.name === 'NotAllowedError';
+      attempt.state = playbackBlocked ? 'blocked' : 'retryable';
+    };
+    try {
+      video.muted = true;
+      const result = video.play();
+      if (result?.then) result.then(() => {
+        if (playback === attempt) attempt.state = 'started';
+      }, failed);
+      else attempt.state = 'started';
+    } catch (error) { failed(error); }
+  }
+
+  function waitingForSource(video, fallbackReason, fallbackCode = 'source-unconfirmed') {
+    if (playbackBlocked) return pending('瀏覽器拒絕自動播放，請在課程頁啟動播放後重試檢查。', 'playback-blocked');
+    if (playAttempts >= 3 && (playback?.state === 'retryable' || playback?.video !== video)) return pending('已嘗試啟動播放器三次，仍無法載入影片來源。', 'player-unavailable');
+    if (playback?.video === video) {
+      if (playback.state === 'retryable' || playback.state === 'pending') {
+        const result = pending(playback.state === 'retryable'
+          ? '播放器尚未成功啟動，稍後會在本堂重新嘗試。'
+          : '播放器正在啟動，等待影片來源載入。', 'player-loading');
+        // The caller may activate only its own inspection tab. A hidden page
+        // alone is insufficient: a stable, bound player must be awaiting play.
+        if (document.visibilityState === 'hidden') result.needsForeground = true;
+        return result;
+      }
+    }
+    return pending(fallbackReason, fallbackCode);
   }
 
   function inspect(item, { play = false } = {}) {
     const binding = bind(item);
-    if (binding.pending) return pending(binding.pending);
+    if (binding.pending) return pending(binding.pending, binding.reasonCode, true);
     const { current, video, assetId, title, row } = binding;
     const signature = `${current.courseKey}|${current.lectureId}|${assetId}|${title}`;
     if (!stable || stable.signature !== signature || stable.video !== video || stable.row !== row) {
       stable = { signature, video, row, at: performance.now() };
-      return { status: 'pending', reason: '正在確認講座與播放器一致。' };
+      return pending('正在確認講座與播放器一致。', 'player-loading');
     }
-    if (performance.now() - stable.at < 200) return { status: 'pending', reason: '等待再次確認講座與播放器一致。' };
-    if (play === true && !played) {
-      played = true;
-      try {
-        video.muted = true;
-        const result = video.play();
-        if (result?.catch) result.catch(() => {});
-      } catch { /* A blocked autoplay remains an unknown source, not DRM. */ }
-    }
+    if (performance.now() - stable.at < 200) return pending('等待再次確認講座與播放器一致。', 'player-loading');
+    if (play === true) tryPlayback(video);
     collectResources();
     const hls = Array.from(resources.values()).filter(entry => entry.assetId === assetId)
       .sort((a, b) => Number(b.isMaster) - Number(a.isMaster) || b.at - a.at).slice(0, 12)
@@ -131,11 +171,11 @@
     let kind = 'hls';
     let candidates = hls;
     if (!hls.length) {
-      if (sawHls) return { status: 'pending', reason: '已載入 HLS，但尚未確認清單屬於這堂影片。' };
-      if (manifestOverflow || manifests.size > 1) return { status: 'pending', reason: '頁面載入多個 DASH 清單，無法確認影片來源。' };
+      if (sawHls) return pending('已載入 HLS，但尚未確認清單屬於這堂影片。', 'source-unconfirmed');
+      if (manifestOverflow || manifests.size > 1) return pending('頁面載入多個 DASH 清單，無法確認影片來源。', 'source-ambiguous');
       const manifest = Array.from(manifests.values())[0];
-      if (!manifest?.allowed) return { status: 'pending', reason: '尚未取得可確認的 HLS 或 DASH 來源。' };
-      if (video.readyState < 2) return { status: 'pending', reason: '等待播放器載入影片，以確認 DASH 來源。' };
+      if (!manifest?.allowed) return waitingForSource(video, '尚未取得可確認的 HLS 或 DASH 來源。');
+      if (video.readyState < 2) return waitingForSource(video, '等待播放器載入影片，以確認 DASH 來源。', 'player-loading');
       const { allowed: _allowed, ...candidate } = manifest;
       kind = 'dash';
       candidates = [candidate];
