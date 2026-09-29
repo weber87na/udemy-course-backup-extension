@@ -12,8 +12,8 @@ function abortCheck(signal) { if (signal?.aborted) throw abortError(); }
 function fatal(message) { const error = new Error(message); error.code = 'COURSE_SESSION_LOST'; return error; }
 function currentCourse(page) { try { return parseCourseUrl(page.url()); } catch { return null; } }
 function safeMessage(value) {
-  return String(value || '無法讀取課程資料。').replace(/https?:\/\/\S+/gi, '[網址已隱藏]')
-    .replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 500);
+  return String(value || '無法讀取課程資料。').replace(/(?:https?:\/\/|blob:|data:)\S+/gi, '[網址已隱藏]')
+    .replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ' ').slice(0, 500);
 }
 function checkCourse(page, expected, {allowLoading = false} = {}) {
   if (page.isClosed()) throw fatal('課程分頁已關閉。');
@@ -61,14 +61,13 @@ async function adapterCall(page, method, value) {
     try { return {ok: true, value: await api[name](argument)}; }
     catch (error) {
       const message = String(error?.message || '無法讀取課程資料。');
-      return {ok: false, message, drmRejected: name === 'capture' && message === '播放器使用受保護的媒體金鑰；此工具不處理 DRM。'};
+      return {ok: false, message};
     }
   }, method, value);
   if (result?.missing) return {missing: true};
   if (!result?.ok) {
     const message = safeMessage(result?.message);
     const error = /手動|課程已變更|目前課程|重新掃描|重新建立|目錄操作已取消/.test(message) ? fatal(message) : new Error(message);
-    if (result?.drmRejected === true) error.drmRejected = true;
     throw error;
   }
   return result.value;
@@ -141,13 +140,15 @@ function validateCatalog(catalog, expected) {
 
 function validateCapture(capture, item, expected, page) {
   const current = checkCourse(page, expected);
-  const captured = parseCourseUrl(capture.pageUrl);
+  let captured;
+  try { captured = parseCourseUrl(capture.pageUrl); }
+  catch { throw fatal('播放器與指定講座資料不一致，已停止操作。'); }
   if (current.lectureId !== item.lectureId || captured.lectureId !== item.lectureId || captured.courseKey !== expected.courseKey ||
     capture.lectureId !== item.lectureId || capture.lectureTitle !== item.title || !/^[1-9]\d*$/.test(capture.assetId || '') ||
     !Array.isArray(capture.candidates) || !capture.candidates.length || capture.candidates.length > 12) throw fatal('播放器與指定講座資料不一致，已停止操作。');
   for (const candidate of capture.candidates) {
     let url;
-    try { url = new URL(candidate.url); } catch { throw new Error('影片清單來源無效，已停止操作。'); }
+    try { url = new URL(candidate.url); } catch { throw fatal('影片清單來源無效，已停止操作。'); }
     if (url.origin !== expected.origin || url.username || url.password || url.port ||
       !url.pathname.startsWith(`/assets/${capture.assetId}/`) || !/\.m3u8$/i.test(url.pathname)) throw fatal('影片清單與目前播放器不一致，已停止操作。');
   }
@@ -163,6 +164,8 @@ export async function captureLecture(session, item, options = {}) {
   if (previous?.lectureId && (previous.courseKey !== expected.courseKey || previous.lectureId !== before.lectureId)) throw fatal('偵測到手動切換講座，已停止操作；請重新掃描課程。');
   abortCheck(run.signal);
   const end = run.now() + run.timeoutMs;
+  let lastPendingReason = '';
+  const captureTimeout = () => `等待影片清單逾時，請確認這堂講座可正常播放。${lastPendingReason ? ` 最後狀態：${lastPendingReason}` : ''}`;
   await page.evaluate(installAdapter);
   if (checkCourse(page, expected).lectureId !== before.lectureId) throw fatal('偵測到手動切換講座，已停止操作；請重新掃描課程。');
   try {
@@ -179,7 +182,7 @@ export async function captureLecture(session, item, options = {}) {
       if (![before.lectureId, item.lectureId].includes(current.lectureId)) throw fatal('偵測到手動切換講座，已停止操作；請重新掃描課程。');
       try {
         const captured = await deadline(adapterCall(page, 'capture', item), {signal: run.signal, timeoutMs: Math.max(1, end - run.now()), page,
-          message: '等待影片清單逾時，請確認這堂講座可正常播放。'});
+          message: captureTimeout()});
         if (captured?.missing) {
           // Full navigation loses the adapter. Reinstall and let its two-poll
           // DOM/asset guard validate readiness, without clicking the row again.
@@ -189,23 +192,21 @@ export async function captureLecture(session, item, options = {}) {
           sessions.set(session, {courseKey: expected.courseKey, lectureId: item.lectureId});
           return result;
         }
-        else if (captured?.status !== 'pending') throw new Error('影片播放器回傳未知狀態，已停止操作。');
+        else if (captured?.status === 'pending') {
+          if (typeof captured.reason === 'string' && captured.reason.trim()) lastPendingReason = safeMessage(captured.reason);
+        } else throw new Error('影片播放器回傳未知狀態，已停止操作。');
       } catch (error) {
         abortCheck(run.signal);
         if (error?.code !== 'PAGE_UNAVAILABLE') throw error;
       }
       await run.sleep(Math.min(500, Math.max(1, end - run.now())), run.signal);
     }
-    throw fatal('等待影片清單逾時，請確認這堂講座可正常播放；工具不處理 DRM。');
+    throw fatal(captureTimeout());
   } catch (error) {
     await cancelAdapter(page);
-    if (error?.drmRejected) {
-      // The adapter confirmed the selected row and detected mediaKeys. This
-      // lecture is skipped, but its confirmed location becomes the baseline
-      // for the next lecture; a timeout or unknown location never does.
+    if (error?.name !== 'AbortError') {
       const current = checkCourse(page, expected);
-      if (current.lectureId !== item.lectureId) throw fatal('偵測到手動切換講座，已停止操作；請重新掃描課程。');
-      sessions.set(session, {courseKey: expected.courseKey, lectureId: item.lectureId});
+      if (![before.lectureId, item.lectureId].includes(current.lectureId)) throw fatal('偵測到手動切換講座，已停止操作；請重新掃描課程。');
     }
     throw error;
   }

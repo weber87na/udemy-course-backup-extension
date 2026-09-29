@@ -115,7 +115,8 @@ $('stream').addEventListener('click', () => run(async () => {
       const videos = Array.from(document.querySelectorAll('video')).filter(v => v.getClientRects().length);
       if (videos.length !== 1) return {error:'無法確認目前播放器。請保留一個影片播放器，再重試。'};
       const video = videos[0];
-      if (video.mediaKeys) return {error:'播放器已使用受保護的媒體金鑰；此工具不處理 DRM。'};
+      // A connected MediaKeys object does not establish that this lecture's stream is encrypted.
+      // The manager checks the selected playlist and each segment before saving.
       const assetId = /^lecture-(\d+)$/.exec(video.id)?.[1] || /^shaka-video-container-(\d+)$/.exec(video.parentElement?.id || '')?.[1];
       if (!assetId) return {error:'無法辨識目前講座的影片 ID，為避免下載錯課已停止。'};
       const candidates = new Map();
@@ -126,7 +127,7 @@ $('stream').addEventListener('click', () => run(async () => {
         } catch { /* Ignore non-URL resource entries. */ }
       }
       const found = Array.from(candidates.values()).sort((a,b)=>Number(b.isMaster)-Number(a.isMaster)||b.at-a.at);
-      if (!found.length) return {error:'尚未找到這堂講座的 HLS 清單。請重新整理課程、播放幾秒後暫停，再重新檢查。'};
+      if (!found.length) return {error:'尚未找到這堂講座的 HLS 清單。請重新整理課程、播放幾秒後暫停，再重新檢查。' + (video.mediaKeys ? ' 播放器已連接媒體保護模組；尚未取得清單，無法確認串流是否加密。' : '')};
       return {assetId,pageUrl:page.origin+page.pathname,candidates:found.slice(0,12),createdAt:Date.now()};
     }
   });

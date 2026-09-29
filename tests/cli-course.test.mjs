@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {navigateCourse, collectCourse, captureLecture} from '../cli/course.mjs';
+import {parsePlaylist} from '../extension/hls.mjs';
 
 const courseKey = 'https://www.udemy.com/course/example';
 const course = `${courseKey}/learn/lecture/11`;
@@ -93,32 +94,31 @@ test('unexpected lesson navigation while capture is pending stops without anothe
   assert.equal(f.calls.activate, 1);
 });
 
-test('DRM refusal is preserved without becoming a session-wide failure', async () => {
-  const f = fixture(); f.api.capture = () => { throw new Error('播放器使用受保護的媒體金鑰；此工具不處理 DRM。'); };
-  await assert.rejects(captureLecture(f.session, item, f.options), error => /DRM/.test(error.message) && !error.code);
-  assert.equal(f.calls.cancel, 1);
+test('mediaKeys pending diagnostics do not block a later matching HLS capture', async () => {
+  const f = fixture();
+  f.api.capture = () => ++f.calls.capture < 2 ? {status: 'pending', mediaKeysAttached: true, reason: '尚未確認串流是否加密。'} : f.captured;
+  assert.equal(await captureLecture(f.session, item, f.options), f.captured);
+  assert.equal(f.calls.capture, 2); assert.equal(f.calls.cancel, 0);
 });
 
-test('successful lecture then DRM refusal still allows the next confirmed lecture', async () => {
+test('playlist encryption refusal after a confirmed capture still allows the next lecture', async () => {
   const f = fixture();
   const drmItem = {...item, key: '13', lectureId: '13', title: 'Protected lesson'};
   const nextItem = {...item, key: '14', lectureId: '14', title: 'Later lesson'};
-  f.api.capture = value => {
-    if (value.lectureId === '13') throw new Error('播放器使用受保護的媒體金鑰；此工具不處理 DRM。');
-    return {...f.captured, pageUrl: `${courseKey}/learn/lecture/${value.lectureId}`, lectureId: value.lectureId, lectureTitle: value.title};
-  };
+  f.api.capture = value => ({...f.captured, pageUrl: `${courseKey}/learn/lecture/${value.lectureId}`, lectureId: value.lectureId, lectureTitle: value.title});
   assert.equal((await captureLecture(f.session, item, f.options)).lectureId, '12');
-  await assert.rejects(captureLecture(f.session, drmItem, f.options), error => error.drmRejected && !error.code);
+  const captured = await captureLecture(f.session, drmItem, f.options);
+  assert.throws(() => parsePlaylist('#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://drm"\n#EXTINF:6,\none.ts\n#EXT-X-ENDLIST', captured.candidates[0].url), /加密|金鑰/);
   assert.equal((await captureLecture(f.session, nextItem, f.options)).lectureId, '14');
   assert.equal(f.calls.activate, 3);
 });
 
-test('manual navigation during a DRM refusal is fatal and never advances the session baseline', async () => {
+test('manual navigation during a capture failure is fatal and never advances the session baseline', async () => {
   const f = fixture();
   await captureLecture(f.session, item, f.options);
   f.api.capture = () => {
     f.state.url = `${courseKey}/learn/lecture/99`;
-    throw new Error('播放器使用受保護的媒體金鑰；此工具不處理 DRM。');
+    throw new Error('播放器目前無法取得清單。');
   };
   await assert.rejects(captureLecture(f.session, {...item, key: '13', lectureId: '13'}, f.options), {code: 'COURSE_SESSION_LOST'});
   await assert.rejects(captureLecture(f.session, {...item, key: '14', lectureId: '14'}, f.options), {code: 'COURSE_SESSION_LOST'});
@@ -135,7 +135,7 @@ test('timeout after switching lecture never advances the confirmed session basel
 });
 
 test('capture refuses mismatched lecture, stale asset URLs and external candidates', async () => {
-  for (const mutate of [f => { f.captured.lectureId = '11'; }, f => { f.captured.candidates[0].url = 'https://www.udemy.com/assets/899/master.m3u8?secret=private'; }, f => { f.captured.candidates[0].url = 'https://example.com/assets/900/master.m3u8?secret=private'; }]) {
+  for (const mutate of [f => { f.captured.lectureId = '11'; }, f => { f.captured.pageUrl = 'invalid private'; }, f => { f.captured.candidates[0].url = 'invalid private'; }, f => { f.captured.candidates[0].url = 'https://www.udemy.com/assets/899/master.m3u8?secret=private'; }, f => { f.captured.candidates[0].url = 'https://example.com/assets/900/master.m3u8?secret=private'; }]) {
     const f = fixture(); mutate(f);
     await assert.rejects(captureLecture(f.session, item, f.options), error => error.code === 'COURSE_SESSION_LOST' && !error.message.includes('private'));
   }
@@ -151,6 +151,27 @@ test('capture timeout cancels page activity and is fatal to the batch session', 
   const f = fixture(); f.api.capture = () => ({status: 'pending'});
   await assert.rejects(captureLecture(f.session, item, {...f.options, timeoutMs: 100}), {code: 'COURSE_SESSION_LOST'});
   assert.equal(f.calls.cancel, 1);
+});
+
+test('capture timeout preserves only a bounded sanitized pending reason without asserting DRM', async () => {
+  const f = fixture();
+  f.api.capture = () => ({status: 'pending', mediaKeysAttached: true,
+    reason: '尚未確認串流是否加密。\n https://www.udemy.com/assets/900/master.m3u8?token=private blob:private data:private \u202e' + 'x'.repeat(1000)});
+  await assert.rejects(captureLecture(f.session, item, {...f.options, timeoutMs: 100}), error => {
+    assert.equal(error.code, 'COURSE_SESSION_LOST');
+    assert.match(error.message, /最後狀態：尚未確認串流是否加密/);
+    assert.doesNotMatch(error.message, /private|DRM|[\n\u202e]/);
+    assert(error.message.length < 600);
+    return true;
+  });
+  assert.equal(f.calls.cancel, 1);
+});
+
+test('hanging capture after a pending response retains its last diagnostic on deadline', async () => {
+  const f = fixture();
+  f.api.capture = () => ++f.calls.capture === 1 ? {status: 'pending', reason: '等待這堂講座的 HLS 清單載入。'} : new Promise(() => {});
+  await assert.rejects(captureLecture(f.session, item, {...f.options, timeoutMs: 20, sleep: async () => { f.state.time += 1; }}), error =>
+    error.code === 'COURSE_SESSION_LOST' && /最後狀態：等待這堂講座的 HLS 清單載入/.test(error.message));
 });
 
 test('abort during pending activation calls adapter cancellation', async () => {

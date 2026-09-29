@@ -53,15 +53,20 @@ export function pageBridge(chromeApi,tabId,courseKey) {
 
 export async function waitForStream(bridge,item,{signal,timeoutMs=60000,onWaiting=()=>{}}={}) {
   const until=Date.now()+timeoutMs;
+  let lastReason='';
   while(Date.now()<until){
     abortIfNeeded(signal);
     const state=await bridge.call('capture',item);
     abortIfNeeded(signal);
     if(state?.status==='ready'&&state.candidates?.length)return state;
-    onWaiting(state?.reason||'等待播放器載入…');
-    await delay(700,signal);
+    lastReason=String(state?.reason||'等待播放器載入…').replace(/(?:https?:\/\/|blob:|data:)[^\s<>"']+/gi,'[來源網址已隱藏]').replace(/[\u0000-\u001f\u007f-\u009f]/g,' ').slice(0,500);
+    onWaiting(lastReason);
+    const remaining=until-Date.now();
+    if(remaining<=0)break;
+    await delay(Math.min(700,remaining),signal);
   }
-  throw new Error('等待播放器逾時。請在課程分頁確認這堂可正常播放；若瀏覽器阻擋自動播放，播放幾秒後暫停，再重試此堂。');
+  abortIfNeeded(signal);
+  throw new Error(`等待播放器逾時。${lastReason?`最後狀態：${lastReason} `:''}請在課程分頁確認這堂可正常播放；若瀏覽器阻擋自動播放，播放幾秒後暫停，再重試此堂。`);
 }
 
 export async function readSelectedMedia(capture,quality,options) {

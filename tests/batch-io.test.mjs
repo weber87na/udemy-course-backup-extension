@@ -217,6 +217,22 @@ test('waitForStream returns a ready capture and rejects an expired deadline',asy
   assert.equal(calls,0);
 });
 
+test('waitForStream preserves an inconclusive protection hint on timeout without leaking URLs',async t=>{
+  let now=0;
+  t.mock.method(Date,'now',()=>now);
+  const waiting=[];
+  await assert.rejects(waitForStream({call:async()=>({status:'pending',mediaKeysAttached:true,
+    reason:'播放器已連接媒體保護模組；尚未取得清單，無法確認是否加密。 https://www.udemy.com/assets/555/a.m3u8?token=private'})},item,
+    {timeoutMs:50,onWaiting:reason=>{waiting.push(reason);now=51;}}),error=>{
+    assert.match(error.message,/播放器逾時/);
+    assert.match(error.message,/無法確認是否加密/);
+    assert.ok(!error.message.includes('token=private'));
+    return true;
+  });
+  assert.equal(waiting.length,1);
+  assert.ok(!waiting[0].includes('token=private'));
+});
+
 test('waitForStream cancels before capture and while waiting for player state',async()=>{
   const before=new AbortController();before.abort();let calls=0;
   await assert.rejects(waitForStream({call:async()=>{calls++;}},item,{signal:before.signal}),{name:'AbortError'});

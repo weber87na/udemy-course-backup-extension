@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
+import { parsePlaylist } from '../extension/hls.mjs';
 
 const source = readFileSync(new URL('../extension/course-adapter.js', import.meta.url), 'utf8');
 class ElementFixture {
@@ -186,6 +187,27 @@ test('capture waits for changed asset and fresh HLS resources after lecture navi
   assert(ready.candidates[0].url.includes('fresh=')); assert.equal(f.video.pauseCount, 1);
 });
 
+test('retained mediaKeys do not bypass lecture, asset or fresh-manifest guards', async () => {
+  const f = fixture(); const catalog = await f.api.collect(f.location.href); const item = catalog.sections[1].items[0];
+  f.video.mediaKeys = {};
+  f.allRows[2].play.onclick = () => {};
+  await f.api.activate(item);
+  assert.match(f.api.capture(item).reason, /網址切換/);
+  f.location.href = `${f.location.origin}/course/example-course/learn/lecture/${item.lectureId}`;
+  assert.match(f.api.capture(item).reason, /目錄確認/);
+  f.allRows.forEach(entry => { entry.row.attrs['aria-current'] = entry.id === item.lectureId ? 'true' : 'false'; });
+  assert.match(f.api.capture(item).reason, /講座標題/);
+  f.region.attrs['aria-label'] = 'Lecture: API requests';
+  assert.match(f.api.capture(item).reason, /新講座/);
+  f.video.id = 'lecture-9200';
+  f.resources.push({ name: `${f.location.origin}/assets/9200/manifest.m3u8?old=private`, startTime: 1 });
+  const pending = f.api.capture(item);
+  assert.equal(pending.status, 'pending'); assert.equal(pending.mediaKeysAttached, true);
+  assert.match(pending.reason, /無法判定串流是否加密/); assert.equal(f.video.pauseCount, 0);
+  f.emit([{ name: `${f.location.origin}/assets/9200/manifest.m3u8?fresh=private`, startTime: f.clock.value + 1 }]);
+  assert.equal(f.api.capture(item).status, 'ready'); assert.equal(f.video.pauseCount, 1);
+});
+
 test('resource observer captures manifests missing from the performance buffer', async () => {
   const f = fixture(); const catalog = await f.api.collect(f.location.href); const item = catalog.sections[0].items[0];
   await f.api.activate(item); f.resources.length = 0;
@@ -203,11 +225,24 @@ test('observer keeps a bounded cache and ignores foreign resource destinations',
   assert.equal(f.api.capture(item).status, 'pending'); assert.equal(f.video.pauseCount, 0);
 });
 
-test('capture without activation requires two stable polls and rejects protected playback', async () => {
+test('capture without activation requires two stable polls even with mediaKeys attached', async () => {
   const f = fixture(); const catalog = await f.api.collect(f.location.href); const item = catalog.sections[0].items[0];
+  f.video.mediaKeys = {};
   assert.equal(f.api.capture(item).status, 'pending'); f.clock.value += 201;
   assert.equal(f.api.capture(item).status, 'ready');
-  f.video.mediaKeys = {}; assert.throws(() => f.api.capture(item), /DRM/);
+});
+
+test('matching HLS with mediaKeys attached accepts clear playlists but still rejects encrypted playlists', async () => {
+  const f = fixture(); const catalog = await f.api.collect(f.location.href); const item = catalog.sections[0].items[0];
+  f.video.mediaKeys = {};
+  await f.api.activate(item);
+  const captured = f.api.capture(item);
+  assert.equal(captured.status, 'ready');
+  const playlist = key => ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:6', key, '#EXTINF:6,', 'one.ts', '#EXT-X-ENDLIST'].filter(Boolean).join('\n');
+  assert.equal(parsePlaylist(playlist('#EXT-X-KEY:METHOD=NONE'), captured.candidates[0].url).type, 'media');
+  for (const key of ['#EXT-X-KEY:METHOD=AES-128,URI="key.bin"', '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://drm"', '#EXT-X-SESSION-KEY:METHOD=SAMPLE-AES-CTR']) {
+    assert.throws(() => parsePlaylist(playlist(key), captured.candidates[0].url), /加密|金鑰/);
+  }
 });
 
 test('metadata loading is not required once matching DOM identity and HLS are available', async () => {

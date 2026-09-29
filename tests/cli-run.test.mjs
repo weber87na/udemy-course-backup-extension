@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {run} from '../cli/index.mjs';
+import {loadPlaylist} from '../extension/transfer.mjs';
 
 const url='https://www.udemy.com/course/test-course/learn/lecture/2';
 const courseKey='https://www.udemy.com/course/test-course';
@@ -26,6 +27,26 @@ test('media failures remain per lecture, redact signed URLs, and return failure 
   const {seen,deps}=fixture({download:async({item})=>{if(item.lectureId==='2')throw new Error('Failed https://www.udemy.com/a?token=PRIVATE_FIXTURE');return {status:'completed',path:'D:/fixture/3.ts',bytes:564};}});
   assert.equal(await run(['download',url,'--all','--json'],deps),1);const result=JSON.parse(seen.out);
   assert.equal(result.completed.length,1);assert.equal(result.failed.length,1);assert.equal(result.status,'partial');assert.equal(seen.close,1);assert.ok(!seen.out.includes('PRIVATE_FIXTURE'));assert.ok(!seen.err.includes('PRIVATE_FIXTURE'));
+});
+
+test('a confirmed capture with an encrypted HLS fails only that lecture and never fetches a key',async()=>{
+  const requests=[];
+  const {seen,deps}=fixture({download:async({capture,item})=>{
+    const key=item.lectureId==='2'?'#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"\n':'';
+    await loadPlaylist(capture.candidates[0].url,{fetcher:async target=>{
+      requests.push(target);
+      return new Response(`#EXTM3U\n#EXT-X-TARGETDURATION:4\n${key}#EXTINF:4,\none.ts\n#EXT-X-ENDLIST\n`);
+    }});
+    return {status:'completed',path:'D:/fixture/3.ts',bytes:564};
+  }});
+  assert.equal(await run(['download',url,'--all','--json'],deps),1);
+  const result=JSON.parse(seen.out);
+  assert.deepEqual(seen.capture,['2','3']);
+  assert.deepEqual(result.failed.map(entry=>entry.lectureId),['2']);
+  assert.match(result.failed[0].reason,/加密/);
+  assert.deepEqual(result.completed.map(entry=>entry.lectureId),['3']);
+  assert.equal(requests.length,2);
+  assert.ok(requests.every(target=>new URL(target).pathname.endsWith('.m3u8')));
 });
 test('existing output is skipped, never reported as a verified completion',async()=>{
   const {seen,deps}=fixture({download:async()=>({status:'skipped',path:'D:/fixture/existing.ts',bytes:564})});

@@ -249,7 +249,6 @@
     if (match.row.getAttribute('aria-current') !== 'true') return { status: 'pending', reason: '等待課程目錄確認目前講座。' };
     const player = currentVideo();
     if (!player) return { status: 'pending', reason: '等待唯一可辨識的影片播放器。' };
-    if (player.video.mediaKeys) throw new Error('播放器使用受保護的媒體金鑰；此工具不處理 DRM。');
     const region = player.video.closest('section[aria-label], [role="region"][aria-label]');
     if (!region || !text(region.getAttribute('aria-label')).endsWith(text(item.title))) return { status: 'pending', reason: '等待播放器顯示對應的講座標題。' };
     if (record?.changed && record.priorAssetId && record.priorAssetId === player.assetId) return { status: 'pending', reason: '等待播放器切換到新講座的影片。' };
@@ -265,7 +264,16 @@
     }
     const threshold = record?.changed ? record.at : 0;
     const found = Array.from(candidates.values()).filter(entry => entry.assetId === player.assetId && entry.at >= threshold).sort((a, b) => Number(b.isMaster) - Number(a.isMaster) || b.at - a.at).slice(0, 12).map(({ assetId: _assetId, ...entry }) => entry);
-    if (!found.length) return { status: 'pending', reason: '等待這堂講座的 HLS 清單載入。' };
+    if (!found.length) {
+      // A MediaKeys object can remain attached across lectures or be created
+      // before an unencrypted source is selected. It is not evidence that
+      // this lecture's stream is encrypted; playlist and segment validation
+      // make that decision after the matching resource is available.
+      const mediaKeysAttached = Boolean(player.video.mediaKeys);
+      return { status: 'pending', mediaKeysAttached, reason: mediaKeysAttached
+        ? '播放器已連接媒體保護模組，但尚未取得這堂講座的 HLS 清單，無法判定串流是否加密。'
+        : '等待這堂講座的 HLS 清單載入。' };
+    }
     player.video.pause();
     if (record) record.ready = true;
     else activation = { lectureId: item.lectureId, title: item.title, courseKey, priorLectureId: item.lectureId, priorAssetId: player.assetId, at: performance.now(), changed: false, ready: true };
